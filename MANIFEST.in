@@ -1,7 +1,9 @@
 include README.md
+include README.en.md
 include LICENSE.txt
 include pyproject.toml
 recursive-include src/leaflink *.py
+recursive-include resource *.png
 recursive-include examples *.example
 recursive-include tests *.py
 prune build
