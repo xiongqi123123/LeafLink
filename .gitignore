@@ -1,0 +1,34 @@
+# Python bytecode
+__pycache__/
+*.py[codz]
+*$py.class
+
+# Packaging artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test and coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Tooling
+.DS_Store
+.python-version
+.pypirc
+
+# IDEs
+.vscode/
+.idea/

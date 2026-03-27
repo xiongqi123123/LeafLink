@@ -1,0 +1,13 @@
+# Ignore LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.synctex.gz
+*.synctex(busy)
+
+# Ignore editor output
+.DS_Store
+
+# Ignore generated figures
+build/
+figures/generated/

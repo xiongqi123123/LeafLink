@@ -1,0 +1,13 @@
+include README.md
+include LICENSE.txt
+include pyproject.toml
+recursive-include src/leaflink *.py
+recursive-include examples *.example
+recursive-include tests *.py
+prune build
+prune dist
+prune src/leafsync.egg-info
+prune src/leaflink.egg-info
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude .DS_Store
