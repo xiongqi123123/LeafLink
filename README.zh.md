@@ -4,7 +4,7 @@
 
 <h1 align="center">LeafLink</h1>
 
-<p align="center">A CLI for syncing local folders with Overleaf and cn.overleaf projects</p>
+<p align="center">本地目录与 Overleaf / cn.overleaf 项目同步 CLI</p>
 
 <p align="center">
   <a href="https://pypi.org/project/leaflink/"><img src="https://img.shields.io/pypi/v/leaflink?label=PyPI&cacheSeconds=300" alt="PyPI" /></a>
@@ -15,75 +15,74 @@
 </p>
 
 <p align="center">
-  <a href="./README.md">简体中文</a> |
+  <a href="./README.en.md">English</a> |
   <a href="https://github.com/xiongqi123123/LeafLink">GitHub</a> |
   <a href="https://pypi.org/project/leaflink/">PyPI</a>
 </p>
 
-<p align="center"><strong>Browser login, clone, pull, push, PDF download, and pseudo real-time sync in one tool.</strong></p>
+<p align="center"><strong>浏览器登录、本地拉取、远端推送、PDF 下载、伪实时协作同步，一套命令完成。</strong></p>
 
-## Overview
+## 项目简介
 
-LeafLink is an open source command-line tool for synchronizing a local directory with an Overleaf project without relying on Overleaf's paid Git bridge.
+LeafLink 是一个开源命令行工具，用于在本地目录和 Overleaf 项目之间同步文件，不依赖 Overleaf 的付费 Git 集成。
 
-It is inspired by the product shape of `overleaf-sync`, but it is not a fork. LeafLink is a clean-room rewrite built for:
+它参考了 `overleaf-sync` 的产品形态与命令体验，但不是 fork，而是从零重写的现代化实现，目标是：
 
-- clearer architecture
-- maintainable Python packaging
-- browser-based authentication
-- reliable local/remote state tracking
-- easier testing and long-term extension
+- 更清晰的工程分层
+- 更稳定的浏览器登录与会话持久化
+- 更可靠的本地/远端状态追踪
+- 更适合扩展的同步引擎与测试结构
 
-## Why Rewrite Instead of Fork
+## 为什么重写，而不是 fork
 
-- To decouple authentication, client, sync engine, and CLI from the start
-- To support both `overleaf.com` and `cn.overleaf.com` as first-class targets
-- To add a `sync` command for local watch + remote polling collaboration
-- To make the project easier to test, release, and maintain as a real PyPI package
+- 希望从一开始就把认证、远端 client、同步引擎、CLI 解耦
+- 需要优先支持 `overleaf.com` 和 `cn.overleaf.com`
+- 需要新增 `sync` 命令来做“本地 watch + 远端轮询”的伪实时协作
+- 需要更容易发布到 PyPI、接入 CI、编写单元测试和长期维护
 
-## Highlights
+## 功能概览
 
-- Browser login with persisted session cookies
-- Manual cookie import as a fallback auth flow
-- List all accessible projects
-- Clone by project URL, project ID, or exact project name
-- Pull remote changes into a local working tree
-- Push local changes to the remote project
-- Download the latest compiled PDF
-- Inspect local vs remote status without applying changes
-- `sync` command for pseudo real-time collaboration
-- Three-way text merge powered by `merge3`
-- Binary-safe syncing for images, PDFs, archives, BibTeX files, style files, and more
+- 浏览器登录并持久化会话 Cookie
+- 手动导入 Cookie 作为后备认证方案
+- 列出账号下项目
+- 通过项目 URL / 项目 ID / 项目名克隆项目
+- 拉取远端变更到本地
+- 推送本地变更到远端
+- 下载最新编译 PDF
+- 查看本地与远端差异
+- `sync` 伪实时同步：本地监听 + 远端轮询 + 冲突处理
+- 文本冲突使用 `merge3` 三方合并
+- 二进制文件安全同步，不假设所有文件都是文本
 
-## Supported URLs
+## 支持的网址
 
 - `https://www.overleaf.com/project/...`
 - `https://cn.overleaf.com/project/...`
 
-## Installation
+## 安装方式
 
-### Install from PyPI
+### 通过 PyPI 安装
 
 ```bash
 pip install leaflink
 ```
 
-Then run:
+安装后可直接使用：
 
 ```bash
 leaflink --help
 ```
 
-### Install optional extras
+### 安装可选依赖
 
 ```bash
 pip install "leaflink[browser,watch]"
 ```
 
-- `browser`: installs Playwright for browser login and remote discovery
-- `watch`: installs `watchdog` for `leaflink sync`
+- `browser`：安装 Playwright，用于浏览器登录和部分远端发现能力
+- `watch`：安装 `watchdog`，用于 `leaflink sync`
 
-### Install from source
+### 从源码安装
 
 ```bash
 git clone https://github.com/xiongqi123123/LeafLink.git
@@ -91,60 +90,60 @@ cd LeafLink
 pip install .
 ```
 
-### First-time Playwright setup
+### 首次使用 Playwright
 
 ```bash
 playwright install chromium
 ```
 
-## Authentication
+## 认证方式
 
-LeafLink stores reusable session data, not plaintext usernames or passwords.
+LeafLink 不保存用户名或密码明文，只保存必要的会话信息。
 
-Default config locations:
+默认配置目录：
 
 - `~/.config/leaflink/auth.json`
 - `~/.config/leaflink/config.toml`
 
-### Browser login
+### 浏览器登录
 
 ```bash
 leaflink login
 leaflink login --base-url https://cn.overleaf.com
 ```
 
-Example output:
+示意输出：
 
 ```text
 [auth] Complete login in the browser window. leaflink will detect the session automatically and close the browser.
 [ok] Saved session for https://cn.overleaf.com
 ```
 
-### Import cookies manually
+### 手动导入 Cookie
 
 ```bash
 leaflink auth import --base-url https://www.overleaf.com --cookie-file cookies.json
 ```
 
-Example output:
+示意输出：
 
 ```text
 [ok] Imported cookies for https://www.overleaf.com
 ```
 
-### Logout
+### 登出
 
 ```bash
 leaflink logout
 ```
 
-Example output:
+示意输出：
 
 ```text
 [ok] Removed saved auth session.
 ```
 
-## Quick Start
+## 快速开始
 
 ```bash
 leaflink login --base-url https://cn.overleaf.com
@@ -158,13 +157,13 @@ leaflink download --output build/output.pdf
 leaflink sync
 ```
 
-## Commands and Sample Output
+## 命令与示例输出
 
-All project names, IDs, paths, and file contents below are fictional examples.
+以下所有项目名、项目 ID、路径和文件内容都只是演示示例。
 
 ### `leaflink list`
 
-Lists all Overleaf projects accessible to the current account. It is useful before cloning so you can confirm project names, IDs, and recent update times.
+用于列出当前账号下可访问的 Overleaf 项目，适合在 clone 前先确认项目名称、项目 ID 和最近更新时间。
 
 ```bash
 leaflink list
@@ -180,7 +179,7 @@ Resume Template CN          c3d4e5f60718293a4b5c6d7e  2026-03-21T07:45:33.501Z
 
 ### `leaflink clone`
 
-Clones a remote project into a local directory and initializes the `.leaflink/` metadata used to track the mapping between the local workspace and the remote project.
+用于将远端项目完整拉取到本地目录，同时初始化 `.leaflink/` 元数据，建立本地目录与远端项目的映射关系。
 
 ```bash
 leaflink clone a1b2c3d4e5f60718293a4b5c
@@ -194,7 +193,7 @@ leaflink clone https://www.overleaf.com/project/a1b2c3d4e5f60718293a4b5c ./paper
 
 ### `leaflink status`
 
-Analyzes local and remote changes without applying anything. Use it to preview added, modified, deleted, and conflicting files before a pull or push.
+用于只做分析，不执行同步。它会检查本地和远端的新增、修改、删除以及潜在冲突，适合在 pull 或 push 之前先预览差异。
 
 ```bash
 leaflink status
@@ -212,7 +211,7 @@ leaflink status
 
 ### `leaflink pull`
 
-Pulls the latest remote changes into the local project directory. It handles additions, updates, deletions, and enters conflict resolution when overlapping text edits are detected.
+用于把远端项目中的最新变更同步到本地目录。它会处理新增、修改、删除，并在检测到重叠文本编辑时进入冲突处理流程。
 
 ```bash
 leaflink pull
@@ -225,7 +224,7 @@ leaflink pull --conflict-strategy keep-remote
 [2026-03-27 14:06:11] [pull] added: appendix.tex
 ```
 
-Conflict example:
+冲突示意：
 
 ```text
 [2026-03-27 14:06:11] [conflict] main.tex
@@ -246,7 +245,7 @@ Choose a resolution:
 
 ### `leaflink push`
 
-Pushes local changes to the remote project. It tries to upload only changed files and works for common binary assets as well as text sources.
+用于把本地目录中的变更上传到远端项目。它会尽量只上传发生变化的文件，并兼容常见二进制资源文件。
 
 ```bash
 leaflink push
@@ -260,7 +259,7 @@ leaflink push --dry-run
 
 ### `leaflink download`
 
-Downloads the most recent compiled PDF from the remote project. This is useful for local archiving, submission workflows, or build pipelines.
+用于下载远端项目最近一次成功编译生成的 PDF，适合在本地归档、投递或集成到其他构建流程中。
 
 ```bash
 leaflink download
@@ -273,7 +272,7 @@ leaflink download --output build/paper.pdf
 
 ### `leaflink sync`
 
-Starts the pseudo real-time sync loop. It watches local file changes and pushes them automatically, while polling the remote project on an interval and pulling remote changes when safe.
+用于启动“伪实时同步”模式。它会监听本地文件变化并自动 push，同时按固定间隔轮询远端变化并自动 pull，在协作写作场景下尤其有用。
 
 ```bash
 leaflink sync
@@ -293,7 +292,7 @@ leaflink sync --once
 [2026-03-27 13:21:44] [pull] updated: refs.bib (saved 2026-03-27 13:21:40, by collaborator)
 ```
 
-## `.leafignore` Example
+## `.leafignore` 示例
 
 ```gitignore
 # LeafLink metadata
@@ -319,49 +318,43 @@ build/
 dist/
 ```
 
-See [examples/leafignore.example](examples/leafignore.example) for a complete example.
+完整示例见 [examples/leafignore.example](examples/leafignore.example)。
 
-## Conflict Handling
+## 冲突处理说明
 
-LeafLink uses three-way merge with:
+LeafLink 使用共同基线、本地版本、远端版本进行三方合并：
 
-- a shared base snapshot
-- the current local file
-- the current remote file
+- 不同位置的文本修改会尽量自动合并
+- 重叠修改会进入冲突流程
+- 二进制文件不会尝试自动 merge
 
-Behavior:
+冲突时可选择：
 
-- non-overlapping text edits are merged when possible
-- overlapping text edits enter conflict resolution
-- binary files are not auto-merged
+1. `keep remote`：使用云端版本覆盖本地
+2. `keep local`：使用本地版本覆盖云端
+3. `duplicate both`：保留本地版本，并将远端版本写成冲突副本
 
-Available strategies:
+## `sync` 的原理与限制
 
-1. `keep remote`
-2. `keep local`
-3. `duplicate both`
+`leaflink sync` 是“伪实时同步”，不是严格意义上的实时多人协同编辑。
 
-## How `sync` Works and Its Limits
+它的工作方式是：
 
-`leaflink sync` is pseudo real-time sync, not true live collaborative editing.
+- 使用 `watchdog` 监听本地目录变更
+- 用 debounce 合并短时间内的多次本地写入
+- 定期轮询远端项目变化
+- 尽量自动 push / pull
+- 遇到重叠编辑时进入冲突处理
 
-It works by:
+限制说明：
 
-- watching the local directory with `watchdog`
-- debouncing bursts of local writes
-- polling the remote project at intervals
-- applying automatic push / pull when safe
-- entering conflict resolution when overlapping edits are detected
+- 远端变化不是通过服务端推送，而是通过轮询获取
+- 文本文件更适合自动合并，二进制文件冲突需要人工选择策略
+- 如果远端私有接口变更，个别写入链路可能需要随 Overleaf 前端更新而调整
 
-Limitations:
+## 本地元数据目录
 
-- remote changes are discovered by polling, not server push
-- text files are better candidates for auto-merge than binary files
-- if Overleaf private web APIs change, some write paths may need updates
-
-## Local Metadata
-
-Each cloned project stores internal metadata in:
+每个已 clone 的项目都会在根目录生成：
 
 ```text
 .leaflink/
@@ -372,26 +365,28 @@ Each cloned project stores internal metadata in:
   logs/
 ```
 
-## Security Notes
+LeafLink 的元数据不会散落在项目根目录其他位置。
 
-- LeafLink does not store plaintext passwords
-- only required session cookies and metadata are persisted
-- logs avoid printing sensitive auth values by default
-- storing sessions is best done on trusted personal devices only
+## 安全说明
 
-## Star History
+- 不保存用户名密码明文
+- 只保存必要的会话 Cookie / session
+- 日志输出默认不会打印敏感认证信息
+- 建议仅在个人可信设备上保存会话
+
+## Star 统计
 
 [![Star History Chart](https://api.star-history.com/svg?repos=xiongqi123123/LeafLink&type=Date)](https://star-history.com/#xiongqi123123/LeafLink&Date)
 
-## Development and Release
+## 开发与发布
 
-- install dev dependencies: `pip install -e ".[dev,browser,watch]"`
-- run tests: `python -m unittest discover -s tests -v`
-- build locally: `python scripts/build_dist.py`
-- GitHub Actions:
+- 安装开发依赖：`pip install -e ".[dev,browser,watch]"`
+- 运行测试：`python -m unittest discover -s tests -v`
+- 本地打包：`python scripts/build_dist.py`
+- GitHub Actions：
   - CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
-  - Publish: [`.github/workflows/publish.yml`](.github/workflows/publish.yml)
+  - 发布: [`.github/workflows/publish.yml`](.github/workflows/publish.yml)
 
-## License
+## 开源协议
 
-This project is licensed under the [Apache License 2.0](LICENSE.txt).
+本项目采用 [Apache License 2.0](LICENSE.txt)。
