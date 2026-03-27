@@ -6,9 +6,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
-from contextlib import redirect_stdout
 
 import bootstrap
 from leaflink.cli import (
@@ -33,7 +33,7 @@ class CliSmokeTests(unittest.TestCase):
         command = [sys.executable, "-m", "leaflink", *args]
         return subprocess.run(
             command,
-            cwd="/Users/xiongqi/Documents/VScodeWorkSpace/LeafSync",
+            cwd=Path(__file__).resolve().parents[1],
             env=env,
             text=True,
             capture_output=True,
