@@ -102,7 +102,7 @@ class OverleafClient:
     ) -> bytes:
         merged_headers = {
             "Cookie": self.session.cookie_header(),
-            "User-Agent": "leaflink/0.1.0",
+            "User-Agent": "leaflink/0.2.0",
         }
         if headers:
             merged_headers.update(headers)
