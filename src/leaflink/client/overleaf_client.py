@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import http.client
 import io
 import re
+import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -34,6 +37,19 @@ _CSRF_META_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Network tuning. cn.overleaf.com direct connections are prone to transient TLS
+# resets, so requests are retried with backoff before giving up.
+_REQUEST_TIMEOUT_SECONDS = 120
+_MAX_REQUEST_ATTEMPTS = 3
+_RETRY_BACKOFF_SECONDS = (0.5, 1.0, 2.0)
+_TRANSIENT_NETWORK_ERRORS = (
+    ssl.SSLError,
+    http.client.IncompleteRead,
+    http.client.RemoteDisconnected,
+    ConnectionError,
+    TimeoutError,
+)
+
 
 class OverleafClientProtocol(Protocol):
     def list_projects(self) -> list[ProjectSummary]:
@@ -43,6 +59,9 @@ class OverleafClientProtocol(Protocol):
         ...
 
     def get_project_snapshot(self, project_id: str) -> RemoteProjectSnapshot:
+        ...
+
+    def reset_remote_cache(self, project_id: str | None = None) -> None:
         ...
 
     def download_project_archive(self, project_id: str) -> DownloadedArchive:
@@ -66,6 +85,9 @@ class OverleafClient:
         self.session = session
         self._csrf_tokens: dict[str, str] = {}
         self._project_trees: dict[str, RemoteProjectTree] = {}
+        # Caches the downloaded archive for the duration of a single high-level
+        # operation. Reset via reset_remote_cache() and invalidated on writes.
+        self._archive_cache: dict[str, DownloadedArchive] = {}
         if session is None:
             raise AuthenticationError(
                 f"No stored session for {self.base_url}. Run `leaflink login --base-url {self.base_url}` first."
@@ -84,17 +106,25 @@ class OverleafClient:
         }
         if headers:
             merged_headers.update(headers)
-        request = urllib.request.Request(url, data=data, headers=merged_headers, method=method)
-        try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                return response.read()
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise ClientError(
-                f"Remote request failed with HTTP {exc.code} for {url}: {body[:200]}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            raise ClientError(f"Could not reach {url}: {exc}") from exc
+        last_error: Exception | None = None
+        for attempt in range(_MAX_REQUEST_ATTEMPTS):
+            request = urllib.request.Request(url, data=data, headers=merged_headers, method=method)
+            try:
+                with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
+                    return response.read()
+            except urllib.error.HTTPError as exc:
+                # A real HTTP response (404/403/...) is not a transient failure.
+                body = exc.read().decode("utf-8", errors="replace")
+                raise ClientError(
+                    f"Remote request failed with HTTP {exc.code} for {url}: {body[:200]}"
+                ) from exc
+            except (urllib.error.URLError, *_TRANSIENT_NETWORK_ERRORS) as exc:
+                last_error = exc
+                if attempt + 1 < _MAX_REQUEST_ATTEMPTS:
+                    time.sleep(_RETRY_BACKOFF_SECONDS[min(attempt, len(_RETRY_BACKOFF_SECONDS) - 1)])
+        raise ClientError(
+            f"Could not reach {url} after {_MAX_REQUEST_ATTEMPTS} attempts: {last_error}"
+        )
 
     def _request_json(
         self,
@@ -168,7 +198,21 @@ class OverleafClient:
             return projects
         return self._list_projects_via_html()
 
+    def reset_remote_cache(self, project_id: str | None = None) -> None:
+        """Drop cached remote archives so the next read fetches fresh data.
+
+        Called at the start of each high-level operation so a single pull/push
+        reuses one download while successive polls still see remote updates.
+        """
+        if project_id is None:
+            self._archive_cache.clear()
+        else:
+            self._archive_cache.pop(project_id, None)
+
     def download_project_archive(self, project_id: str) -> DownloadedArchive:
+        cached = self._archive_cache.get(project_id)
+        if cached is not None:
+            return cached
         candidates = (
             f"{self._project_url(project_id)}/download/zip",
             f"{self._project_url(project_id)}/download/source",
@@ -178,7 +222,9 @@ class OverleafClient:
             try:
                 payload = self._request("GET", url)
                 files = self._read_archive(payload)
-                return DownloadedArchive(project_id=project_id, project_name=project_id, files=files)
+                archive = DownloadedArchive(project_id=project_id, project_name=project_id, files=files)
+                self._archive_cache[project_id] = archive
+                return archive
             except Exception as exc:  # pragma: no cover - depends on remote API
                 last_error = exc
         raise ClientError(f"Could not download project archive for {project_id}: {last_error}")
@@ -253,6 +299,7 @@ class OverleafClient:
         if parsed.get("success") is not True:
             raise ClientError(f"Upload failed for {path}: {parsed}")
         self._project_trees.pop(project_id, None)
+        self._archive_cache.pop(project_id, None)
 
     def delete_file(self, project_id: str, path: str) -> None:
         tree = self.get_project_tree(project_id)
@@ -271,6 +318,7 @@ class OverleafClient:
             },
         )
         self._project_trees.pop(project_id, None)
+        self._archive_cache.pop(project_id, None)
 
     def download_pdf(self, project_id: str) -> bytes:
         candidates = (

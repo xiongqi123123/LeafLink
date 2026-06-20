@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +22,7 @@ from leaflink.sync.conflict import (
 from leaflink.sync.diff import ChangeSet, detect_conflicts, diff_files
 from leaflink.sync.ignore import IgnoreMatcher
 from leaflink.sync.state import (
+    FileFingerprint,
     StateStore,
     SyncState,
     mark_pulled,
@@ -84,6 +86,9 @@ class SyncEngine:
         self.state_store = StateStore(self.metadata)
 
     def status(self) -> SyncReport:
+        # Each top-level operation (and each sync poll) starts from a fresh remote
+        # read; within the operation the archive download is reused from cache.
+        self._reset_remote_cache()
         state = self.state_store.load()
         local_now = scan_local_files(self.project_root, self.ignore)
         remote_snapshot = self.client.get_project_snapshot(self.project.project_id)
@@ -120,7 +125,7 @@ class SyncEngine:
         remote_now = remote_snapshot_to_fingerprints(remote_snapshot)
         state = SyncState(local_files=local_now, remote_files=remote_now, last_remote_revision=revision)
         self.state_store.save(mark_pulled(state, revision=revision))
-        self._write_base_snapshot_from_local()
+        self._write_base_snapshot_from_local(local_now)
 
     def pull(
         self,
@@ -224,8 +229,9 @@ class SyncEngine:
                 preferred="push",
             )
             remote_paths = set(archive.files)
+            local_now = scan_local_files(self.project_root, self.ignore)
             delete_paths = sorted(
-                (set(report.local_changes.deleted) | {path for path in report.conflicts if path not in scan_local_files(self.project_root, self.ignore) and path in remote_paths})
+                (set(report.local_changes.deleted) | {path for path in report.conflicts if path not in local_now and path in remote_paths})
                 - resolved_paths
             )
             for path in delete_paths:
@@ -410,7 +416,12 @@ class SyncEngine:
         if after_push:
             mark_pushed(state)
         self.state_store.save(state)
-        self._write_base_snapshot_from_local()
+        self._write_base_snapshot_from_local(local_now)
+
+    def _reset_remote_cache(self) -> None:
+        reset = getattr(self.client, "reset_remote_cache", None)
+        if callable(reset):
+            reset(self.project.project_id)
 
     def _base_snapshot_root(self) -> Path:
         return self.metadata.cache_dir / "base"
@@ -424,20 +435,51 @@ class SyncEngine:
             return None
         return path.read_bytes()
 
-    def _write_base_snapshot_from_local(self) -> None:
+    def _base_manifest_path(self) -> Path:
+        return self.metadata.cache_dir / "base.manifest.json"
+
+    def _load_base_manifest(self) -> dict[str, str]:
+        path = self._base_manifest_path()
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {str(key): str(value) for key, value in data.items()}
+
+    def _save_base_manifest(self, manifest: dict[str, str]) -> None:
+        path = self._base_manifest_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+    def _write_base_snapshot_from_local(self, fingerprints: dict[str, FileFingerprint] | None = None) -> None:
         base_root = self._base_snapshot_root()
         base_root.mkdir(parents=True, exist_ok=True)
-        current_paths = scan_local_files(self.project_root, self.ignore)
-        existing_paths = [path for path in base_root.rglob("*") if path.is_file()]
-        valid_relative_paths = {path for path in current_paths}
-        for existing in existing_paths:
+        if fingerprints is None:
+            fingerprints = scan_local_files(self.project_root, self.ignore)
+        valid_relative_paths = set(fingerprints)
+        manifest = self._load_base_manifest()
+
+        # Drop base copies for files that no longer exist locally.
+        for existing in [path for path in base_root.rglob("*") if path.is_file()]:
             relative = existing.relative_to(base_root).as_posix()
             if relative not in valid_relative_paths:
                 existing.unlink()
-        for relative_path in valid_relative_paths:
+                manifest.pop(relative, None)
+
+        # Copy only files whose content changed since the last base snapshot.
+        for relative_path, fingerprint in fingerprints.items():
             destination = self._base_snapshot_path(relative_path)
+            if manifest.get(relative_path) == fingerprint.sha256 and destination.exists():
+                continue
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes((self.project_root / relative_path).read_bytes())
+            manifest[relative_path] = fingerprint.sha256
+
+        self._save_base_manifest({path: manifest[path] for path in valid_relative_paths if path in manifest})
 
     def _build_conflict_details(self, paths: list[str], remote_files: dict[str, bytes]) -> dict[str, MergeAnalysis]:
         analyses: dict[str, MergeAnalysis] = {}
