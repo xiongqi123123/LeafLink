@@ -17,6 +17,7 @@ from html import unescape
 from pathlib import Path
 from typing import Protocol
 
+from leaflink import __version__
 from leaflink.client.models import (
     AuthSession,
     DownloadedArchive,
@@ -49,6 +50,18 @@ _TRANSIENT_NETWORK_ERRORS = (
     ConnectionError,
     TimeoutError,
 )
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def __init__(self, base_url: str) -> None:
+        parsed = urllib.parse.urlparse(base_url.rstrip("/"))
+        self._origin = (parsed.scheme.lower(), parsed.netloc.lower())
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        parsed = urllib.parse.urlparse(newurl)
+        if (parsed.scheme.lower(), parsed.netloc.lower()) != self._origin:
+            raise ClientError(f"Refusing cross-origin redirect from {req.full_url} to {newurl}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 class OverleafClientProtocol(Protocol):
@@ -85,9 +98,13 @@ class OverleafClient:
         self.session = session
         self._csrf_tokens: dict[str, str] = {}
         self._project_trees: dict[str, RemoteProjectTree] = {}
+        # Uploads can replace entity IDs, but the project root stays stable
+        # during a batch. Keep it separate from the invalidated entity tree.
+        self._root_folder_ids: dict[str, str] = {}
         # Caches the downloaded archive for the duration of a single high-level
         # operation. Reset via reset_remote_cache() and invalidated on writes.
         self._archive_cache: dict[str, DownloadedArchive] = {}
+        self._opener = urllib.request.build_opener(_SameOriginRedirectHandler(self.base_url))
         if session is None:
             raise AuthenticationError(
                 f"No stored session for {self.base_url}. Run `leaflink login --base-url {self.base_url}` first."
@@ -102,7 +119,7 @@ class OverleafClient:
     ) -> bytes:
         merged_headers = {
             "Cookie": self.session.cookie_header(),
-            "User-Agent": "leaflink/0.2.0",
+            "User-Agent": f"leaflink/{__version__}",
         }
         if headers:
             merged_headers.update(headers)
@@ -110,7 +127,7 @@ class OverleafClient:
         for attempt in range(_MAX_REQUEST_ATTEMPTS):
             request = urllib.request.Request(url, data=data, headers=merged_headers, method=method)
             try:
-                with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
+                with self._opener.open(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
                     return response.read()
             except urllib.error.HTTPError as exc:
                 # A real HTTP response (404/403/...) is not a transient failure.
@@ -199,15 +216,16 @@ class OverleafClient:
         return self._list_projects_via_html()
 
     def reset_remote_cache(self, project_id: str | None = None) -> None:
-        """Drop cached remote archives so the next read fetches fresh data.
+        """Expire operation-scoped archives, upload roots and entity trees.
 
         Called at the start of each high-level operation so a single pull/push
-        reuses one download while successive polls still see remote updates.
+        reuses its data while successive operations see remote updates.
         """
-        if project_id is None:
-            self._archive_cache.clear()
-        else:
-            self._archive_cache.pop(project_id, None)
+        for cache in (self._archive_cache, self._root_folder_ids, self._project_trees):
+            if project_id is None:
+                cache.clear()
+            else:
+                cache.pop(project_id, None)
 
     def download_project_archive(self, project_id: str) -> DownloadedArchive:
         cached = self._archive_cache.get(project_id)
@@ -229,9 +247,17 @@ class OverleafClient:
                 last_error = exc
         raise ClientError(f"Could not download project archive for {project_id}: {last_error}")
 
+    def get_sync_snapshot(self, project_id: str) -> RemoteProjectSnapshot:
+        """Read authoritative file content without optional UI metadata requests."""
+        return self._get_snapshot(project_id, enriched=False)
+
     def get_project_snapshot(self, project_id: str) -> RemoteProjectSnapshot:
+        """Read content plus project details and per-file history metadata."""
+        return self._get_snapshot(project_id, enriched=True)
+
+    def _get_snapshot(self, project_id: str, *, enriched: bool) -> RemoteProjectSnapshot:
         archive = self.download_project_archive(project_id)
-        history_metadata = self._get_project_history_metadata(project_id)
+        history_metadata = self._get_project_history_metadata(project_id) if enriched else {}
         files = {
             path: RemoteFile(
                 path=path,
@@ -243,11 +269,11 @@ class OverleafClient:
             )
             for path, content in archive.files.items()
         }
-        info = self.resolve_project(project_id)
+        info = self.resolve_project(project_id) if enriched else None
         return RemoteProjectSnapshot(
             project_id=project_id,
-            project_name=info.name,
-            revision=info.revision,
+            project_name=info.name if info else archive.project_name,
+            revision=info.revision if info else None,
             files=files,
         )
 
@@ -256,11 +282,13 @@ class OverleafClient:
             return self._project_trees[project_id]
         tree = load_project_tree_from_browser(self.base_url, self.session, project_id)
         self._project_trees[project_id] = tree
+        self._root_folder_ids[project_id] = tree.root_folder_id
         return tree
 
     def upload_file(self, project_id: str, path: str, content: bytes) -> None:
-        tree = self.get_project_tree(project_id)
-        root_folder_id = tree.root_folder_id
+        root_folder_id = self._root_folder_ids.get(project_id)
+        if root_folder_id is None:
+            root_folder_id = self.get_project_tree(project_id).root_folder_id
         relative_path = Path(path).as_posix()
         name = Path(relative_path).name
         body, content_type = build_multipart_body(
@@ -274,16 +302,6 @@ class OverleafClient:
         )
         csrf_token = self._get_csrf_token(project_id)
         url = f"{self._project_upload_url(project_id)}?folder_id={urllib.parse.quote(root_folder_id)}"
-        response = self._request_json(
-            "POST",
-            url,
-            payload=None,
-            headers={
-                "Accept": "application/json",
-                "Content-Type": content_type,
-                "X-Csrf-Token": csrf_token,
-            },
-        ) if False else None
         # urllib multipart requests need a raw body rather than JSON helpers.
         raw = self._request(
             "POST",

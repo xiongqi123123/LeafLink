@@ -60,6 +60,56 @@ It is inspired by the product shape of `overleaf-sync`, but it is not a fork. Le
 - `https://www.overleaf.com/project/...`
 - `https://cn.overleaf.com/project/...`
 
+
+## Self-hosted Overleaf (0.3.0)
+
+Use the origin of your instance, including its port when needed:
+
+```bash
+leaflink login --base-url https://overleaf.lan.example.com
+leaflink list --base-url https://overleaf.lan.example.com
+leaflink clone https://overleaf.lan.example.com/project/PROJECT_ID ./paper
+```
+
+Browser login or `leaflink auth import --base-url ... --cookie-file cookies.json`
+can supply a session for that instance. Keep cookie files and `auth.json` out of
+Git and workflow logs. Login sessions are scoped to their instance. Self-hosted
+HTTP(S) origins are supported; reverse-proxy subpath deployments are not.
+TLS certificate verification remains enabled. Editor API compatibility still
+depends on the deployed Overleaf version; validate uploads on a test project first.
+
+### Ignore behavior
+
+Place `.leafignore` at the project root (or pass `--ignore-file` to the sync commands).
+Rules filter **both local and remote** changes: clone/pull, push, and deletions.
+Adding a rule leaves existing local and remote files untouched; it does not delete
+them. The long-running sync loop reloads rules at the next synchronization check.
+A first clone uses the remote ignore file if no local one exists; a pre-existing
+local ignore file takes precedence. During pull, incoming rule changes are applied
+before other files. If both sides edited the rule file, synchronization stops for
+manual resolution instead of guessing which policy to use. Ignoring files does not avoid downloading the
+project ZIP; filtering happens before files are applied locally.
+
+Supported patterns: `*`, `?`, character classes, `**` for whole directory segments,
+`/` for a root-anchored pattern, trailing `/` for directories, and `!` for re-inclusion.
+Later matching rules win. For example:
+
+```gitignore
+build/
+*.pdf
+!figures/**
+```
+
+Unlike Git, LeafLink allows an explicit later rule to re-include a file beneath an
+ignored directory. It reads one root ignore file; nested `.gitignore` files and Git's
+backslash-escape syntax are not supported. `.git` and `.leaflink` metadata are always
+excluded and cannot be re-included. `.leafignore` itself is synced unless excluded.
+Default LaTeX artifact patterns still apply; ordinary rules may override them.
+
+When running in disposable CI jobs, persist the project's `.leaflink` baseline
+separately from authentication secrets. This release does not install a Gitea
+workflow or automatically turn a new checkout into an initialized sync project.
+
 ## Installation
 
 ### Install from PyPI

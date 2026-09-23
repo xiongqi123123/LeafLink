@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -69,23 +70,45 @@ class StateStore:
         )
 
 
-def scan_local_files(project_root: Path, ignore: IgnoreMatcher) -> dict[str, FileFingerprint]:
+# Cache is scoped to one engine, not persisted as a synchronization baseline.
+HashCache = dict[str, tuple[tuple[int, ...], str]]
+
+
+def scan_local_files(
+    project_root: Path, ignore: IgnoreMatcher, *,
+    cache: HashCache | None = None, force_hash: bool = False,
+) -> dict[str, FileFingerprint]:
     files: dict[str, FileFingerprint] = {}
-    for path in sorted(project_root.rglob("*")):
-        rel_path = path.relative_to(project_root).as_posix()
-        if path.is_dir():
-            if ignore.matches(rel_path, is_dir=True):
+    seen: set[str] = set()
+    for directory, dirs, names in os.walk(project_root):
+        # Only prune unconditional metadata exclusions; user rules can reinclude children.
+        dirs[:] = sorted(name for name in dirs if name not in {'.git', '.leaflink'})
+        for name in sorted(names):
+            path = Path(directory) / name
+            rel_path = path.relative_to(project_root).as_posix()
+            if ignore.matches(rel_path):
                 continue
-            continue
-        if ignore.matches(rel_path):
-            continue
-        stat = path.stat()
-        files[rel_path] = FileFingerprint(
-            path=rel_path,
-            size=stat.st_size,
-            mtime=stat.st_mtime,
-            sha256=sha256_file(path),
-        )
+            stat = path.stat()
+            signature = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+            previous = cache.get(rel_path) if cache is not None else None
+            if not force_hash and previous is not None and previous[0] == signature:
+                digest = previous[1]
+            else:
+                digest = sha256_file(path)
+                after = path.stat()
+                after_signature = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+                # Never reuse a hash if the file changed while it was being read.
+                if cache is not None:
+                    cache.pop(rel_path, None)
+                    if signature == after_signature:
+                        cache[rel_path] = (signature, digest)
+            seen.add(rel_path)
+            files[rel_path] = FileFingerprint(
+                path=rel_path, size=stat.st_size, mtime=stat.st_mtime, sha256=digest,
+            )
+    if cache is not None:
+        for removed in cache.keys() - seen:
+            del cache[removed]
     return files
 
 

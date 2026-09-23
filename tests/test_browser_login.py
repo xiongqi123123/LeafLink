@@ -43,12 +43,59 @@ class BrowserLoginTests(unittest.TestCase):
             [("sharelatex.sid", ".www.overleaf.com"), ("XSRF-TOKEN", "cn.overleaf.com")],
         )
 
+    def test_select_relevant_cookies_filters_to_custom_base_url(self) -> None:
+        cookies = select_relevant_cookies(
+            [
+                {
+                    "name": "sharelatex.sid",
+                    "value": "custom",
+                    "domain": "overleaf.lan.x-lab.cc",
+                },
+                {
+                    "name": "sharelatex.sid",
+                    "value": "official",
+                    "domain": ".www.overleaf.com",
+                },
+                {
+                    "name": "XSRF-TOKEN",
+                    "value": "other",
+                    "domain": "git.lan.x-lab.cc",
+                },
+            ],
+            base_url="https://overleaf.lan.x-lab.cc",
+        )
+        self.assertEqual(
+            [(cookie.name, cookie.value, cookie.domain) for cookie in cookies],
+            [("sharelatex.sid", "custom", "overleaf.lan.x-lab.cc")],
+        )
+
     def test_detect_base_url_uses_final_supported_host(self) -> None:
         base_url = detect_base_url(
             ["https://www.overleaf.com/login", "https://cn.overleaf.com/project"],
             fallback="https://www.overleaf.com",
         )
         self.assertEqual(base_url, "https://cn.overleaf.com")
+
+    def test_detect_base_url_and_dashboard_use_custom_base_url(self) -> None:
+        self.assertTrue(
+            is_project_dashboard(
+                ["https://overleaf.lan.x-lab.cc/login", "https://overleaf.lan.x-lab.cc/project"],
+                base_url="https://overleaf.lan.x-lab.cc",
+            )
+        )
+        self.assertFalse(
+            is_project_dashboard(
+                ["https://www.overleaf.com/project"],
+                base_url="https://overleaf.lan.x-lab.cc",
+            )
+        )
+        self.assertEqual(
+            detect_base_url(
+                ["https://www.overleaf.com/project", "https://overleaf.lan.x-lab.cc/project/abc"],
+                fallback="https://overleaf.lan.x-lab.cc",
+            ),
+            "https://overleaf.lan.x-lab.cc",
+        )
 
     def test_project_dashboard_detection_and_supported_cookie_detection(self) -> None:
         self.assertTrue(
@@ -60,5 +107,18 @@ class BrowserLoginTests(unittest.TestCase):
                 [
                     {"name": "custom_session", "domain": ".overleaf.com"},
                 ]
+            )
+        )
+
+    def test_supported_cookie_detection_uses_custom_base_url(self) -> None:
+        self.assertTrue(is_supported_cookie_domain("overleaf.lan.x-lab.cc", base_url="https://overleaf.lan.x-lab.cc"))
+        self.assertTrue(is_supported_cookie_domain(".lan.x-lab.cc", base_url="https://overleaf.lan.x-lab.cc"))
+        self.assertFalse(is_supported_cookie_domain("www.overleaf.com", base_url="https://overleaf.lan.x-lab.cc"))
+        self.assertTrue(
+            has_supported_cookies(
+                [
+                    {"name": "sharelatex.sid", "domain": "overleaf.lan.x-lab.cc"},
+                ],
+                base_url="https://overleaf.lan.x-lab.cc",
             )
         )

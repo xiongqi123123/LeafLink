@@ -17,6 +17,7 @@ from leaflink.cli import (
     _format_change_suffix,
     _looks_like_project_reference,
     _pad_display,
+    _pick_base_url,
     _print_project_list,
     _print_sync_event,
     _resolve_clone_inputs,
@@ -24,6 +25,7 @@ from leaflink.cli import (
     _truncate_display,
 )
 from leaflink.client.models import ProjectSummary
+from leaflink.exceptions import ProjectError
 from leaflink.sync.diff import ChangeSet
 from leaflink.sync.engine import ChangeDetails, LocalChangeEvent, SyncLifecycleEvent, SyncReport
 
@@ -70,6 +72,46 @@ class CliSmokeTests(unittest.TestCase):
             logout_result = self._run("logout", env=env)
             self.assertEqual(logout_result.returncode, 0, logout_result.stderr)
             self.assertIn("Removed saved auth session", logout_result.stdout)
+
+    def test_cookie_import_filters_to_selected_base_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cookie_file = root / "cookies.json"
+            cookie_file.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "sharelatex.sid",
+                            "value": "custom",
+                            "domain": "overleaf.lan.x-lab.cc",
+                        },
+                        {
+                            "name": "sharelatex.sid",
+                            "value": "official",
+                            "domain": "www.overleaf.com",
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(Path.cwd() / "src")
+            env["LEAFLINK_CONFIG_DIR"] = str(root / "config")
+
+            import_result = self._run(
+                "auth",
+                "import",
+                "--base-url",
+                "https://overleaf.lan.x-lab.cc",
+                "--cookie-file",
+                str(cookie_file),
+                env=env,
+            )
+
+            self.assertEqual(import_result.returncode, 0, import_result.stderr)
+            auth_payload = json.loads((root / "config" / "auth.json").read_text(encoding="utf-8"))
+            cookies = auth_payload["https://overleaf.lan.x-lab.cc"]["cookies"]
+            self.assertEqual([(item["value"], item["domain"]) for item in cookies], [("custom", "overleaf.lan.x-lab.cc")])
 
     def test_print_project_list_formats_columns(self) -> None:
         buffer = StringIO()
@@ -155,3 +197,30 @@ class CliSmokeTests(unittest.TestCase):
         self.assertEqual(str(target_dir), "paper-dir")
         self.assertTrue(_looks_like_project_reference("69c0a83c665d307225ca1e2a"))
         self.assertFalse(_looks_like_project_reference("ACM"))
+
+    def test_pick_base_url_accepts_custom_origins_and_project_links(self) -> None:
+        self.assertEqual(
+            _pick_base_url("https://overleaf.lan.x-lab.cc/", "https://www.overleaf.com"),
+            "https://overleaf.lan.x-lab.cc",
+        )
+        self.assertEqual(
+            _pick_base_url("http://127.0.0.1:8080", "https://www.overleaf.com"),
+            "http://127.0.0.1:8080",
+        )
+        self.assertEqual(
+            _pick_base_url(None, "https://www.overleaf.com", "https://overleaf.lan.x-lab.cc/project/abc123"),
+            "https://overleaf.lan.x-lab.cc",
+        )
+
+    def test_pick_base_url_rejects_non_origin_base_urls(self) -> None:
+        invalid = [
+            "https://user:pass@overleaf.lan.x-lab.cc",
+            "https://overleaf.lan.x-lab.cc/sharelatex",
+            "https://overleaf.lan.x-lab.cc?next=/project",
+            "https://overleaf.lan.x-lab.cc#fragment",
+            "https://overleaf.lan.x-lab.cc:bad",
+        ]
+        for value in invalid:
+            with self.subTest(value=value):
+                with self.assertRaises(ProjectError):
+                    _pick_base_url(value, "https://www.overleaf.com")

@@ -8,6 +8,7 @@ from typing import Iterable
 from urllib.parse import urlparse
 
 from leaflink.client.models import SessionCookie
+from leaflink.config import normalize_base_url
 from leaflink.exceptions import AuthenticationError
 from leaflink.utils.console import print_console
 
@@ -36,14 +37,14 @@ class BrowserLoginResult:
     cookies: list[SessionCookie]
 
 
-def select_relevant_cookies(cookies: Iterable[dict[str, object]]) -> list[SessionCookie]:
+def select_relevant_cookies(cookies: Iterable[dict[str, object]], base_url: str | None = None) -> list[SessionCookie]:
     selected: list[SessionCookie] = []
     fallback: list[SessionCookie] = []
     seen: set[tuple[str, str, str]] = set()
     for item in cookies:
         name = str(item.get("name", ""))
         domain = str(item.get("domain", "")).lstrip(".").lower()
-        if not is_supported_cookie_domain(domain):
+        if not is_supported_cookie_domain(domain, base_url=base_url):
             continue
         cookie = SessionCookie(
             name=name,
@@ -65,11 +66,11 @@ def select_relevant_cookies(cookies: Iterable[dict[str, object]]) -> list[Sessio
     return selected or fallback
 
 
-def select_supported_cookies(cookies: Iterable[dict[str, object]]) -> list[SessionCookie]:
+def select_supported_cookies(cookies: Iterable[dict[str, object]], base_url: str | None = None) -> list[SessionCookie]:
     supported: list[SessionCookie] = []
     for item in cookies:
         domain = str(item.get("domain", "")).lstrip(".").lower()
-        if not is_supported_cookie_domain(domain):
+        if not is_supported_cookie_domain(domain, base_url=base_url):
             continue
         supported.append(
             SessionCookie(
@@ -84,36 +85,58 @@ def select_supported_cookies(cookies: Iterable[dict[str, object]]) -> list[Sessi
     return supported
 
 
-def has_supported_cookies(cookies: Iterable[dict[str, object]]) -> bool:
+def has_supported_cookies(cookies: Iterable[dict[str, object]], base_url: str | None = None) -> bool:
     for item in cookies:
         domain = str(item.get("domain", "")).lstrip(".").lower()
-        if is_supported_cookie_domain(domain):
+        if is_supported_cookie_domain(domain, base_url=base_url):
             return True
     return False
 
 
-def is_supported_cookie_domain(domain: str) -> bool:
+def is_supported_cookie_domain(domain: str, base_url: str | None = None) -> bool:
     normalized = domain.lstrip(".").lower()
+    if base_url is not None:
+        allowed_hosts = _allowed_cookie_hosts(base_url)
+        return any(host == normalized or host.endswith(f".{normalized}") for host in allowed_hosts)
     if normalized in SUPPORTED_COOKIE_DOMAINS:
         return True
     return any(host.endswith(f".{normalized}") for host in SUPPORTED_HOSTS)
 
 
-def is_project_dashboard(urls: Iterable[str]) -> bool:
+def is_project_dashboard(urls: Iterable[str], base_url: str | None = None) -> bool:
+    allowed_origins = _allowed_url_origins(base_url) if base_url is not None else {("https", host) for host in SUPPORTED_HOSTS}
     for url in urls:
         parsed = urlparse(url)
-        if parsed.netloc in SUPPORTED_HOSTS and parsed.path.startswith("/project"):
+        if (parsed.scheme.lower(), parsed.netloc.lower()) in allowed_origins and parsed.path.startswith("/project"):
             return True
     return False
 
 
 def detect_base_url(urls: Iterable[str], fallback: str) -> str:
     detected = fallback.rstrip("/")
+    allowed_origins = _allowed_url_origins(fallback)
     for url in urls:
-        host = urlparse(url).netloc
-        if host in SUPPORTED_HOSTS:
-            detected = f"https://{host}"
+        parsed = urlparse(url)
+        origin = (parsed.scheme.lower(), parsed.netloc.lower())
+        if origin in allowed_origins:
+            detected = f"{origin[0]}://{origin[1]}"
     return detected
+
+
+def _allowed_url_origins(base_url: str) -> set[tuple[str, str]]:
+    normalized = normalize_base_url(base_url)
+    parsed = urlparse(normalized)
+    if parsed.netloc in SUPPORTED_HOSTS:
+        return {("https", host) for host in SUPPORTED_HOSTS}
+    return {(parsed.scheme, parsed.netloc)}
+
+
+def _allowed_cookie_hosts(base_url: str) -> set[str]:
+    normalized = normalize_base_url(base_url)
+    parsed = urlparse(normalized)
+    if parsed.hostname in SUPPORTED_HOSTS:
+        return set(SUPPORTED_HOSTS)
+    return {parsed.hostname.lower()} if parsed.hostname else set()
 
 
 def login_with_browser(base_url: str, timeout_seconds: int = 300) -> BrowserLoginResult:
@@ -143,16 +166,16 @@ def login_with_browser(base_url: str, timeout_seconds: int = 300) -> BrowserLogi
                 urls = [current.url for current in context.pages]
                 last_urls = urls or last_urls
                 browser_cookies = context.cookies()
-                cookies = select_relevant_cookies(browser_cookies)
+                cookies = select_relevant_cookies(browser_cookies, base_url=base_url)
             except PlaywrightError as exc:
                 raise AuthenticationError(
                     "The browser window was closed before leaflink captured a reusable session. "
                     "Please run `leaflink login` again and leave the browser open until leaflink confirms success."
                 ) from exc
 
-            if is_project_dashboard(last_urls) and has_supported_cookies(browser_cookies):
+            if is_project_dashboard(last_urls, base_url=base_url) and has_supported_cookies(browser_cookies, base_url=base_url):
                 if not cookies:
-                    cookies = select_supported_cookies(browser_cookies)
+                    cookies = select_supported_cookies(browser_cookies, base_url=base_url)
                 resolved_base_url = detect_base_url(last_urls, fallback=base_url)
                 browser.close()
                 return BrowserLoginResult(base_url=resolved_base_url, cookies=cookies)

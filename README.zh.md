@@ -59,6 +59,50 @@ LeafLink 是一个开源命令行工具，用于在本地目录和 Overleaf 项�
 - `https://www.overleaf.com/project/...`
 - `https://cn.overleaf.com/project/...`
 
+
+## 自建 Overleaf（0.3.0）
+
+指定自建实例的地址，使用非默认端口时也要包含端口：
+
+```bash
+leaflink login --base-url https://overleaf.lan.example.com
+leaflink list --base-url https://overleaf.lan.example.com
+leaflink clone https://overleaf.lan.example.com/project/PROJECT_ID ./paper
+```
+
+支持浏览器登录，也可用 `leaflink auth import --base-url ... --cookie-file cookies.json`
+导入该实例的会话。Cookie 文件和 `auth.json` 不应提交到 Git 或打印到 CI 日志。
+支持 HTTP(S) 站点根地址，不支持反向代理子路径部署；HTTPS 证书验证保持开启。
+自建版本的编辑器接口可能不同，正式使用前请先用测试项目验证上传兼容性。
+
+### 忽略规则的实际行为
+
+在项目根目录放置 `.leafignore`；同步命令也可通过 `--ignore-file` 指定其他文件。
+规则同时过滤本地与远端变化，覆盖 clone、pull、push 和删除同步。
+新增忽略规则不会删除已有的本地或远端文件；长期运行的 sync 会在下一次检查时重新读取规则。
+首次 clone 时，没有本地规则文件才采用远端规则，本地已有规则优先。
+pull 时先采用远端规则更新再处理其他文件；如果两边都修改了规则文件，会停止同步，
+需要先人工解决规则冲突，避免用错误策略覆盖或删除文件。
+目前仍会下载项目 ZIP，忽略过滤发生在文件写入本地之前，并非网络传输过滤。
+
+支持 `*`、`?`、字符集合、跨目录的 `**`、根目录锚定 `/`、目录后缀 `/` 和反选 `!`。
+后面的匹配规则优先，例如：
+
+```gitignore
+build/
+*.pdf
+!figures/**
+```
+
+上例忽略构建目录和 PDF，但保留 figures 中的资源。与 Git 不同，LeafLink 允许后续规则
+直接重新包含被忽略目录中的文件；只读取一个根规则文件，不读取嵌套 `.gitignore`，
+不支持 Git 的反斜杠转义语法。`.git` 和 `.leaflink` 始终受到保护，不能通过反选上传。
+`.leafignore` 本身默认参与同步。默认 LaTeX 临时文件规则仍然生效，也可以用后续规则覆盖。
+
+在每次重新创建的 CI 工作目录中使用时，需要单独持久保存 `.leaflink` 同步基线，
+认证信息则放入 Secrets。本版不会自动安装 Gitea 工作流，也不会自动把普通 checkout
+转换为已初始化的同步项目。
+
 ## 安装方式
 
 ### 通过 PyPI 安装

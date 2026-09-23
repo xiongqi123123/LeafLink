@@ -6,9 +6,10 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
-from leaflink.auth.browser_login import BrowserLoginResult, login_with_browser
+from leaflink.auth.browser_login import BrowserLoginResult, login_with_browser, select_supported_cookies
 from leaflink.auth.cookie_import import import_cookies_from_file
 from leaflink.client.models import AuthSession, SessionCookie
+from leaflink.exceptions import AuthenticationError
 from leaflink.utils.paths import app_config_dir
 from leaflink.utils.time import utc_now_iso
 
@@ -58,6 +59,12 @@ class AuthManager:
         base_url = base_url.rstrip("/")
         if cookie_file is not None:
             cookies = import_cookies_from_file(cookie_file)
+            cookies = select_supported_cookies(
+                [asdict(cookie) for cookie in cookies],
+                base_url=base_url,
+            )
+            if not cookies:
+                raise AuthenticationError(f"No cookies in {cookie_file} match {base_url}.")
             resolved_base_url = base_url
         else:
             browser_result = login_with_browser(base_url)

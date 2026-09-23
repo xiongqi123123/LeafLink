@@ -11,7 +11,7 @@ from typing import Callable, Sequence
 
 from leaflink.auth.manager import AuthManager
 from leaflink.client.overleaf_client import OverleafClient, OverleafClientProtocol
-from leaflink.config import ConfigStore, SUPPORTED_BASE_URLS
+from leaflink.config import ConfigStore, infer_base_url_from_project_url, normalize_base_url
 from leaflink.exceptions import ClientError, LeafsyncError, ProjectError, SyncConflictError
 from leaflink.project.metadata import ProjectConfig, ProjectMetadataStore
 from leaflink.sync.conflict import ConflictStrategy, MergeAnalysis
@@ -226,15 +226,18 @@ def main(argv: Sequence[str] | None = None, client_factory: ClientFactory | None
 
 
 def _pick_base_url(base_url: str | None, default_base_url: str, project_hint: str | None = None) -> str:
-    if project_hint:
-        if project_hint.startswith("https://cn.overleaf.com/"):
-            return "https://cn.overleaf.com"
-        if project_hint.startswith("https://www.overleaf.com/"):
-            return "https://www.overleaf.com"
-    chosen = (base_url or default_base_url).rstrip("/")
-    if chosen not in SUPPORTED_BASE_URLS:
-        raise ProjectError(f"Unsupported base URL: {chosen}")
-    return chosen
+    if base_url is None and project_hint:
+        try:
+            inferred = infer_base_url_from_project_url(project_hint)
+        except ValueError as exc:
+            raise ProjectError(f"Invalid project URL: {project_hint}. {exc}") from exc
+        if inferred is not None:
+            return inferred
+    chosen = base_url or default_base_url
+    try:
+        return normalize_base_url(chosen)
+    except ValueError as exc:
+        raise ProjectError(f"Invalid base URL: {chosen}. {exc}") from exc
 
 
 def _make_client(

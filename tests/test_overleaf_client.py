@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import io
 import unittest
+import urllib.request
 import zipfile
+from unittest.mock import patch
 
 import bootstrap
-from leaflink.client.models import AuthSession, ProjectSummary, SessionCookie
-from leaflink.client.overleaf_client import OverleafClient
+from leaflink.client.models import AuthSession, ProjectSummary, RemoteEntity, RemoteProjectTree, SessionCookie
+from leaflink.client.overleaf_client import OverleafClient, _SameOriginRedirectHandler
 from leaflink.exceptions import ClientError
 
 
@@ -147,3 +149,65 @@ class OverleafClientTests(unittest.TestCase):
         files = OverleafClient._read_archive(payload.getvalue())
         self.assertIn("resume.tex", files)
         self.assertIn("fonts/Main/Fontin-SmallCaps.otf", files)
+
+    def test_redirect_handler_rejects_cross_origin_redirects(self) -> None:
+        handler = _SameOriginRedirectHandler("https://overleaf.lan.x-lab.cc")
+        request = urllib.request.Request("https://overleaf.lan.x-lab.cc/project/abc")
+
+        with self.assertRaises(ClientError):
+            handler.redirect_request(
+                request,
+                fp=None,
+                code=302,
+                msg="Found",
+                headers={},
+                newurl="https://www.overleaf.com/project/abc",
+            )
+
+
+class ClientPerformanceTests(unittest.TestCase):
+    def test_sync_snapshot_uses_only_archive_and_preserves_content_fingerprints(self) -> None:
+        client = _StubHistoryClient()
+        enriched = client.get_project_snapshot("p1")
+        with patch.object(client, "resolve_project", side_effect=AssertionError("project lookup")), \
+             patch.object(client, "_get_project_history_metadata", side_effect=AssertionError("history lookup")):
+            snapshot = client.get_sync_snapshot("p1")
+        self.assertEqual(set(snapshot.files), set(enriched.files))
+        for path, file in snapshot.files.items():
+            self.assertEqual(file.content_hash, enriched.files[path].content_hash)
+            self.assertEqual(file.size, enriched.files[path].size)
+            self.assertIsNone(file.updated_at)
+            self.assertIsNone(file.updated_by)
+
+    def test_upload_batch_reuses_root_but_delete_refreshes_entity_ids(self) -> None:
+        client = _StubListClient()
+        old_tree = RemoteProjectTree("p1", "root", {
+            "main.tex": RemoteEntity("old-id", "doc", "main.tex", "main.tex"),
+        })
+        new_tree = RemoteProjectTree("p1", "root", {
+            "main.tex": RemoteEntity("new-id", "doc", "main.tex", "main.tex"),
+        })
+        with patch("leaflink.client.overleaf_client.load_project_tree_from_browser", side_effect=[old_tree, new_tree]) as load, \
+             patch.object(client, "_get_csrf_token", return_value="csrf"), \
+             patch.object(client, "_request", return_value=b'{"success":true}') as request:
+            client.upload_file("p1", "main.tex", b"one")
+            client.upload_file("p1", "refs.bib", b"two")
+            self.assertEqual(load.call_count, 1)
+            client.delete_file("p1", "main.tex")
+            self.assertEqual(load.call_count, 2)
+            self.assertEqual(request.call_args.args[:2], ("DELETE", "https://cn.overleaf.com/project/p1/doc/new-id"))
+
+    def test_operation_reset_expires_root_and_tree_for_selected_project(self) -> None:
+        client = _StubListClient()
+        trees = [RemoteProjectTree("p1", "root-one", {}), RemoteProjectTree("p1", "root-two", {})]
+        with patch("leaflink.client.overleaf_client.load_project_tree_from_browser", side_effect=trees) as load, \
+             patch.object(client, "_get_csrf_token", return_value="csrf"), \
+             patch.object(client, "_request", return_value=b'{"success":true}') as request:
+            client.upload_file("p1", "main.tex", b"one")
+            client.reset_remote_cache("p1")
+            client.upload_file("p1", "main.tex", b"two")
+            self.assertEqual(load.call_count, 2)
+            self.assertIn("folder_id=root-two", request.call_args.args[1])
+            client.reset_remote_cache()
+            self.assertEqual(client._root_folder_ids, {})
+            self.assertEqual(client._project_trees, {})

@@ -1,5 +1,7 @@
 include README.md
 include README.en.md
+include README.zh.md
+include CHANGELOG.md
 include LICENSE.txt
 include pyproject.toml
 recursive-include src/leaflink *.py

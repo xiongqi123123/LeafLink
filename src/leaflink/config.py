@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 from leaflink.utils.paths import app_config_dir
 
@@ -11,6 +12,32 @@ SUPPORTED_BASE_URLS = (
     "https://www.overleaf.com",
     "https://cn.overleaf.com",
 )
+
+
+def normalize_base_url(value: str) -> str:
+    """Return a validated HTTP(S) origin for an Overleaf-compatible instance."""
+
+    parsed = urlparse(value.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Base URL must be an HTTP or HTTPS URL.")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ValueError("Base URL must include a valid port.") from exc
+    if parsed.username or parsed.password:
+        raise ValueError("Base URL must not include credentials.")
+    if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
+        raise ValueError("Base URL must be a bare origin without path, query, or fragment.")
+    return f"{parsed.scheme}://{parsed.netloc.lower()}".rstrip("/")
+
+
+def infer_base_url_from_project_url(value: str) -> str | None:
+    parsed = urlparse(value.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return None
+    if not parsed.path.startswith("/project/"):
+        return None
+    return normalize_base_url(f"{parsed.scheme}://{parsed.netloc}")
 
 
 @dataclass(slots=True)

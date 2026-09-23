@@ -82,17 +82,24 @@ class SyncEngine:
         self.metadata.require_initialized()
         self.project = self.metadata.load_project()
         self.client = client
+        self.ignore_file = ignore_file
         self.ignore = IgnoreMatcher.from_project(self.project_root, ignore_file=ignore_file)
         self.state_store = StateStore(self.metadata)
+        self._hash_cache = {}
 
-    def status(self) -> SyncReport:
+    def status(self, *, reload_ignore: bool = True, include_metadata: bool = True) -> SyncReport:
         # Each top-level operation (and each sync poll) starts from a fresh remote
         # read; within the operation the archive download is reused from cache.
+        if reload_ignore:
+            self._reload_ignore()
         self._reset_remote_cache()
         state = self.state_store.load()
-        local_now = scan_local_files(self.project_root, self.ignore)
-        remote_snapshot = self.client.get_project_snapshot(self.project.project_id)
-        remote_now = remote_snapshot_to_fingerprints(remote_snapshot)
+        state.local_files = self._visible_files(state.local_files)
+        state.remote_files = self._visible_files(state.remote_files)
+        local_now = scan_local_files(self.project_root, self.ignore, cache=self._hash_cache)
+        remote_snapshot = (self.client.get_project_snapshot(self.project.project_id)
+                           if include_metadata else self._get_sync_snapshot())
+        remote_now = self._visible_files(remote_snapshot_to_fingerprints(remote_snapshot))
         local_changes = diff_files(state.local_files, local_now)
         remote_changes = diff_files(state.remote_files, remote_now)
         conflicts = sorted(
@@ -105,7 +112,7 @@ class SyncEngine:
         }
         remote_details = {
             path: ChangeDetails(path=path, changed_at=item.updated_at, changed_by=item.updated_by)
-            for path, item in remote_snapshot.files.items()
+            for path, item in remote_snapshot.files.items() if not self.ignore.matches(path)
         }
         return SyncReport(
             local_changes=local_changes,
@@ -116,13 +123,23 @@ class SyncEngine:
         )
 
     def clone_into(self, archive: DownloadedArchive, revision: str | None = None) -> None:
+        # A remote ignore file supplies the policy on first clone. An existing
+        # local policy takes precedence; do not overwrite it with the archive.
+        policy_path = self.project_root / self.ignore_file
+        existing_policy = policy_path.exists()
+        if not existing_policy and self.ignore_file in archive.files:
+            policy_path.parent.mkdir(parents=True, exist_ok=True)
+            policy_path.write_bytes(archive.files[self.ignore_file])
+        self._reload_ignore()
         for relative_path, content in archive.files.items():
+            if self.ignore.matches(relative_path) or (relative_path == self.ignore_file and existing_policy):
+                continue
             destination = self.project_root / relative_path
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(content)
-        remote_snapshot = self.client.get_project_snapshot(self.project.project_id)
-        local_now = scan_local_files(self.project_root, self.ignore)
-        remote_now = remote_snapshot_to_fingerprints(remote_snapshot)
+        remote_snapshot = self._get_sync_snapshot()
+        local_now = scan_local_files(self.project_root, self.ignore, cache=self._hash_cache)
+        remote_now = self._visible_files(remote_snapshot_to_fingerprints(remote_snapshot))
         state = SyncState(local_files=local_now, remote_files=remote_now, last_remote_revision=revision)
         self.state_store.save(mark_pulled(state, revision=revision))
         self._write_base_snapshot_from_local(local_now)
@@ -133,11 +150,26 @@ class SyncEngine:
         dry_run: bool = False,
         conflict_resolver: Callable[[str, MergeAnalysis], ConflictStrategy] | None = None,
     ) -> SyncReport:
-        report = self.status()
+        report = self.status(include_metadata=False)
         if strategy is not None and strategy not in CONFLICT_STRATEGIES:
             raise SyncConflictError(f"Unsupported conflict strategy: {strategy}")
 
         archive = self.client.download_project_archive(self.project.project_id)
+        policy_changed = self.ignore_file in report.remote_changes.all_paths()
+        policy_content = archive.files.get(self.ignore_file)
+        if policy_changed:
+            if self.ignore_file in report.local_changes.all_paths():
+                raise SyncConflictError(
+                    "Ignore rules changed on both sides; resolve them before syncing project files.",
+                    [self.ignore_file],
+                )
+            # Evaluate the incoming policy without writing during preflight/dry-run.
+            # Otherwise files newly ignored in this revision could still be written
+            # or deleted using yesterday's local rules.
+            self.ignore.patterns[:] = IgnoreMatcher.from_text(
+                policy_content.decode("utf-8") if policy_content is not None else ""
+            ).patterns
+            report = self.status(reload_ignore=False, include_metadata=False)
         report.conflict_details = self._build_conflict_details(report.conflicts, archive.files)
         unresolved = [path for path, analysis in report.conflict_details.items() if not analysis.can_auto_merge]
         if unresolved and strategy is None and conflict_resolver is None:
@@ -150,6 +182,17 @@ class SyncEngine:
         pulled: list[str] = []
         merged: list[str] = []
         if not dry_run:
+            if policy_changed:
+                policy_path = self.project_root / self.ignore_file
+                if policy_content is None:
+                    policy_path.unlink(missing_ok=True)
+                else:
+                    policy_path.parent.mkdir(parents=True, exist_ok=True)
+                    policy_path.write_bytes(policy_content)
+                # Handle the control file once, even if it now excludes itself.
+                for paths in (report.remote_changes.added, report.remote_changes.modified, report.remote_changes.deleted):
+                    if self.ignore_file in paths:
+                        paths.remove(self.ignore_file)
             pulled, merged, resolved_paths = self._resolve_conflicts(
                 report,
                 archive.files,
@@ -157,6 +200,8 @@ class SyncEngine:
                 conflict_resolver=conflict_resolver,
                 preferred="pull",
             )
+            if policy_changed:
+                pulled.append(self.ignore_file)
             remote_file_paths = set(archive.files)
             delete_paths = sorted(
                 (set(report.remote_changes.deleted) | {path for path in report.conflicts if path not in remote_file_paths})
@@ -204,7 +249,7 @@ class SyncEngine:
         dry_run: bool = False,
         conflict_resolver: Callable[[str, MergeAnalysis], ConflictStrategy] | None = None,
     ) -> SyncReport:
-        report = self.status()
+        report = self.status(include_metadata=False)
         if strategy is not None and strategy not in CONFLICT_STRATEGIES:
             raise SyncConflictError(f"Unsupported conflict strategy: {strategy}")
 
@@ -229,7 +274,7 @@ class SyncEngine:
                 preferred="push",
             )
             remote_paths = set(archive.files)
-            local_now = scan_local_files(self.project_root, self.ignore)
+            local_now = scan_local_files(self.project_root, self.ignore, cache=self._hash_cache)
             delete_paths = sorted(
                 (set(report.local_changes.deleted) | {path for path in report.conflicts if path not in local_now and path in remote_paths})
                 - resolved_paths
@@ -354,7 +399,7 @@ class SyncEngine:
                     if remote_due and on_event:
                         on_event(SyncLifecycleEvent(stage="poll", message="Checking remote changes."))
 
-                    preflight = self.status()
+                    preflight = self.status(include_metadata=False)
                     if preflight.conflicts:
                         if on_event:
                             on_event(preflight)
@@ -404,12 +449,14 @@ class SyncEngine:
                 watcher.stop()
 
     def _refresh_state(self, after_pull: bool = False, after_push: bool = False) -> None:
-        remote_snapshot = self.client.get_project_snapshot(self.project.project_id)
-        local_now = scan_local_files(self.project_root, self.ignore)
-        remote_now = remote_snapshot_to_fingerprints(remote_snapshot)
+        remote_snapshot = self._get_sync_snapshot()
+        local_now = scan_local_files(self.project_root, self.ignore, cache=self._hash_cache)
+        remote_now = self._visible_files(remote_snapshot_to_fingerprints(remote_snapshot))
         state = self.state_store.load()
-        state.local_files = local_now
-        state.remote_files = remote_now
+        # Keep ignored historical fingerprints frozen. If a rule is later
+        # removed, changes on either side still compare against the old base.
+        state.local_files = {**{p: f for p, f in state.local_files.items() if self.ignore.matches(p)}, **local_now}
+        state.remote_files = {**{p: f for p, f in state.remote_files.items() if self.ignore.matches(p)}, **remote_now}
         state.last_remote_revision = remote_snapshot.revision
         if after_pull:
             mark_pulled(state, revision=remote_snapshot.revision)
@@ -417,6 +464,17 @@ class SyncEngine:
             mark_pushed(state)
         self.state_store.save(state)
         self._write_base_snapshot_from_local(local_now)
+
+    def _get_sync_snapshot(self):
+        reader = getattr(self.client, "get_sync_snapshot", self.client.get_project_snapshot)
+        return reader(self.project.project_id)
+
+    def _reload_ignore(self) -> None:
+        # Preserve the object shared by the long-running filesystem watcher.
+        self.ignore.patterns[:] = IgnoreMatcher.from_project(self.project_root, self.ignore_file).patterns
+
+    def _visible_files(self, files: dict[str, FileFingerprint]) -> dict[str, FileFingerprint]:
+        return {path: item for path, item in files.items() if not self.ignore.matches(path)}
 
     def _reset_remote_cache(self) -> None:
         reset = getattr(self.client, "reset_remote_cache", None)
@@ -459,14 +517,14 @@ class SyncEngine:
         base_root = self._base_snapshot_root()
         base_root.mkdir(parents=True, exist_ok=True)
         if fingerprints is None:
-            fingerprints = scan_local_files(self.project_root, self.ignore)
+            fingerprints = scan_local_files(self.project_root, self.ignore, cache=self._hash_cache)
         valid_relative_paths = set(fingerprints)
         manifest = self._load_base_manifest()
 
         # Drop base copies for files that no longer exist locally.
         for existing in [path for path in base_root.rglob("*") if path.is_file()]:
             relative = existing.relative_to(base_root).as_posix()
-            if relative not in valid_relative_paths:
+            if relative not in valid_relative_paths and not self.ignore.matches(relative):
                 existing.unlink()
                 manifest.pop(relative, None)
 
