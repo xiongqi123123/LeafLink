@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import shutil
 import sys
 import unicodedata
 from pathlib import Path
 from typing import Callable, Sequence
 
+from leaflink.auth.cookie_import import COOKIE_FILE_EXAMPLE, parse_cookie_pairs
 from leaflink.auth.manager import AuthManager
 from leaflink.client.overleaf_client import OverleafClient, OverleafClientProtocol
 from leaflink.config import ConfigStore, infer_base_url_from_project_url, normalize_base_url
-from leaflink.exceptions import ClientError, LeafsyncError, ProjectError, SyncConflictError
+from leaflink.exceptions import AuthenticationError, ClientError, LeafsyncError, ProjectError, SyncConflictError
 from leaflink.project.metadata import ProjectConfig, ProjectMetadataStore
 from leaflink.sync.conflict import ConflictStrategy, MergeAnalysis
 from leaflink.sync.engine import ChangeDetails, LocalChangeEvent, SyncEngine, SyncLifecycleEvent, SyncReport
@@ -23,24 +25,73 @@ from leaflink.utils.time import format_display_time, utc_now_iso
 
 ClientFactory = Callable[[str], OverleafClientProtocol]
 
+_indented_example = "\n".join(f"  {line}" for line in COOKIE_FILE_EXAMPLE.splitlines())
+
+COOKIE_HELP = f"""\
+where to find the cookie:
+  Log in with any browser (it can be on another machine), then open
+  DevTools -> Application (Firefox: Storage) -> Cookies -> your Overleaf site.
+  The session cookie is usually:
+    overleaf_session2   www.overleaf.com / cn.overleaf.com
+    sharelatex.sid      self-hosted Overleaf (Community Edition / Server Pro)
+
+cookie file format (--cookie-file):
+{_indented_example}
+  "domain" is optional and defaults to the --base-url host; "path", "secure"
+  and "httpOnly" are optional. {{"cookies": [...]}} exports from browser cookie
+  extensions and a plain {{"NAME": "VALUE"}} object are also accepted."""
+
+LOGIN_EPILOG = f"""\
+Without --cookie-file or --cookie, a browser window opens for login.
+On a server without a display, use `leaflink auth import` to enter cookies.
+
+examples:
+  leaflink login --base-url https://cn.overleaf.com
+  leaflink login --cookie-file cookies.json
+  leaflink login --base-url https://overleaf.example.com --cookie sharelatex.sid=s%3A...
+
+{COOKIE_HELP}"""
+
+AUTH_IMPORT_EPILOG = f"""\
+Without --cookie-file or --cookie, leaflink prompts for cookie names and values
+(values are hidden). You can also paste a whole `Cookie:` request header
+(a=1; b=2) at the name prompt.
+
+examples:
+  leaflink auth import --base-url https://www.overleaf.com
+  leaflink auth import --cookie-file cookies.json
+  leaflink auth import --base-url https://overleaf.example.com --cookie sharelatex.sid=s%3A...
+
+{COOKIE_HELP}"""
+
 
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="leaflink", description="Sync local folders with Overleaf projects.")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    login_parser = subparsers.add_parser("login", help="Login via browser or imported cookies.")
+    login_parser = subparsers.add_parser(
+        "login",
+        help="Login via browser or imported cookies.",
+        epilog=LOGIN_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     login_parser.add_argument("--base-url", default=None, help="Overleaf base URL.")
-    login_parser.add_argument("--cookie-file", type=Path, default=None, help="Import cookies from JSON.")
+    _add_cookie_source_options(login_parser)
 
     logout_parser = subparsers.add_parser("logout", help="Clear saved authentication state.")
     logout_parser.add_argument("--base-url", default=None, help="Only remove credentials for one base URL.")
 
-    auth_parser = subparsers.add_parser("auth", help="Authentication helpers.")
+    auth_parser = subparsers.add_parser("auth", help="Authentication helpers (cookie import for servers without a browser).")
     auth_subparsers = auth_parser.add_subparsers(dest="auth_command", required=True)
-    auth_import_parser = auth_subparsers.add_parser("import", help="Import cookies from JSON.")
+    auth_import_parser = auth_subparsers.add_parser(
+        "import",
+        help="Import cookies from a JSON file, the command line, or an interactive prompt.",
+        epilog=AUTH_IMPORT_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     auth_import_parser.add_argument("--base-url", default=None, help="Overleaf base URL.")
-    auth_import_parser.add_argument("--cookie-file", type=Path, required=True, help="JSON cookie file.")
+    _add_cookie_source_options(auth_import_parser)
 
     list_parser = subparsers.add_parser("list", help="List accessible projects.")
     list_parser.add_argument("--base-url", default=None, help="Overleaf base URL.")
@@ -80,6 +131,18 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _add_cookie_source_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--cookie-file", type=Path, default=None, help="Import cookies from a JSON file (format below).")
+    parser.add_argument(
+        "--cookie",
+        dest="cookies",
+        action="append",
+        default=None,
+        metavar="NAME=VALUE",
+        help="Add one cookie; repeatable. Note: values end up in your shell history.",
+    )
+
+
 def _add_project_command_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project-dir", type=Path, default=Path.cwd(), help="Project directory.")
     parser.add_argument("--ignore-file", default=".leafignore", help="Ignore file name.")
@@ -104,7 +167,11 @@ def main(argv: Sequence[str] | None = None, client_factory: ClientFactory | None
         match args.command:
             case "login":
                 base_url = _pick_base_url(args.base_url, config.default_base_url)
-                session = auth_manager.login(base_url, cookie_file=args.cookie_file)
+                session = auth_manager.login(
+                    base_url,
+                    cookie_file=args.cookie_file,
+                    cookie_pairs=_parse_cookie_args(args.cookies),
+                )
                 config.default_base_url = session.base_url
                 config_store.save(config)
                 print_console("ok", f"Saved session for {session.base_url}")
@@ -117,7 +184,15 @@ def main(argv: Sequence[str] | None = None, client_factory: ClientFactory | None
             case "auth":
                 if args.auth_command == "import":
                     base_url = _pick_base_url(args.base_url, config.default_base_url)
-                    session = auth_manager.login(base_url, cookie_file=args.cookie_file)
+                    cookie_pairs = _parse_cookie_args(args.cookies)
+                    if args.cookie_file is None and not cookie_pairs:
+                        if not sys.stdin.isatty():
+                            raise AuthenticationError(
+                                "No cookies given. Pass --cookie-file FILE or --cookie NAME=VALUE, "
+                                "or run in a terminal to be prompted. See `leaflink auth import --help`."
+                            )
+                        cookie_pairs = _prompt_cookie_pairs(base_url)
+                    session = auth_manager.login(base_url, cookie_file=args.cookie_file, cookie_pairs=cookie_pairs)
                     config.default_base_url = session.base_url
                     config_store.save(config)
                     print_console("ok", f"Imported cookies for {session.base_url}")
@@ -223,6 +298,42 @@ def main(argv: Sequence[str] | None = None, client_factory: ClientFactory | None
         print_console("error", str(exc), stream=sys.stderr)
         return 1
     return 0
+
+
+def _parse_cookie_args(values: Sequence[str] | None) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for value in values or []:
+        pairs.extend(parse_cookie_pairs(value))
+    return pairs
+
+
+def _prompt_cookie_pairs(
+    base_url: str,
+    read_line: Callable[[str], str] = input,
+    read_secret: Callable[[str], str] = getpass.getpass,
+) -> list[tuple[str, str]]:
+    print_console("auth", f"Enter cookies for {base_url} from a logged-in browser (DevTools -> Application -> Cookies).")
+    print_console("auth", "Session cookie: overleaf_session2 on overleaf.com, sharelatex.sid on self-hosted Overleaf.")
+    print_console("auth", "Leave the name empty to finish.")
+    pairs: list[tuple[str, str]] = []
+    while True:
+        try:
+            name = read_line("Cookie name: ").strip()
+        except EOFError:
+            break
+        if not name:
+            break
+        if "=" in name:
+            pairs.extend(parse_cookie_pairs(name))
+            continue
+        value = read_secret(f"Value of {name} (hidden): ").strip()
+        if not value:
+            print_console("warn", f"Skipped {name}: empty value.")
+            continue
+        pairs.append((name, value))
+    if not pairs:
+        raise AuthenticationError("No cookies entered.")
+    return pairs
 
 
 def _pick_base_url(base_url: str | None, default_base_url: str, project_hint: str | None = None) -> str:

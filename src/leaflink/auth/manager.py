@@ -7,7 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from leaflink.auth.browser_login import BrowserLoginResult, login_with_browser, select_supported_cookies
-from leaflink.auth.cookie_import import import_cookies_from_file
+from leaflink.auth.cookie_import import cookies_from_pairs, import_cookies_from_file
 from leaflink.client.models import AuthSession, SessionCookie
 from leaflink.exceptions import AuthenticationError
 from leaflink.utils.paths import app_config_dir
@@ -55,16 +55,23 @@ class AuthManager:
             encoding="utf-8",
         )
 
-    def login(self, base_url: str, cookie_file: Path | None = None) -> AuthSession:
+    def login(
+        self,
+        base_url: str,
+        cookie_file: Path | None = None,
+        cookie_pairs: list[tuple[str, str]] | None = None,
+    ) -> AuthSession:
         base_url = base_url.rstrip("/")
-        if cookie_file is not None:
-            cookies = import_cookies_from_file(cookie_file)
+        if cookie_file is not None or cookie_pairs:
+            cookies = import_cookies_from_file(cookie_file, base_url=base_url) if cookie_file is not None else []
+            cookies += cookies_from_pairs(cookie_pairs or [], base_url=base_url)
             cookies = select_supported_cookies(
-                [asdict(cookie) for cookie in cookies],
+                [{**asdict(cookie), "httpOnly": cookie.http_only} for cookie in cookies],
                 base_url=base_url,
             )
             if not cookies:
-                raise AuthenticationError(f"No cookies in {cookie_file} match {base_url}.")
+                source = cookie_file if cookie_file is not None else "the entered cookies"
+                raise AuthenticationError(f"No cookies in {source} match {base_url}. Check each cookie's \"domain\".")
             resolved_base_url = base_url
         else:
             browser_result = login_with_browser(base_url)

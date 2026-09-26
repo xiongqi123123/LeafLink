@@ -145,12 +145,20 @@ def login_with_browser(base_url: str, timeout_seconds: int = 300) -> BrowserLogi
         from playwright.sync_api import sync_playwright
     except ImportError as exc:  # pragma: no cover
         raise AuthenticationError(
-            "Playwright is not installed. Install `leaflink[browser]` or use `--cookie-file`."
+            "Playwright is not installed. Install `leaflink[browser]`, "
+            "or run `leaflink auth import` to enter cookies instead."
         ) from exc
 
     login_url = f"{base_url.rstrip('/')}/login"
     with sync_playwright() as playwright:  # pragma: no cover
-        browser = playwright.chromium.launch(headless=False)
+        try:
+            browser = playwright.chromium.launch(headless=False)
+        except PlaywrightError as exc:
+            raise AuthenticationError(
+                "Could not open a browser window (no display, or Chromium not installed via "
+                "`playwright install chromium`). On a server, run `leaflink auth import` to enter "
+                "cookies copied from a browser on another machine."
+            ) from exc
         context = browser.new_context()
         page = context.new_page()
         page.goto(login_url, wait_until="domcontentloaded")

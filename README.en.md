@@ -44,7 +44,7 @@ It is inspired by the product shape of `overleaf-sync`, but it is not a fork. Le
 ## Highlights
 
 - Browser login with persisted session cookies
-- Manual cookie import as a fallback auth flow
+- Cookie import (interactive prompt, `--cookie`, or JSON file) for servers without a browser
 - List all accessible projects
 - Clone by project URL, project ID, or exact project name
 - Pull remote changes into a local working tree
@@ -71,8 +71,8 @@ leaflink list --base-url https://overleaf.lan.example.com
 leaflink clone https://overleaf.lan.example.com/project/PROJECT_ID ./paper
 ```
 
-Browser login or `leaflink auth import --base-url ... --cookie-file cookies.json`
-can supply a session for that instance. Keep cookie files and `auth.json` out of
+Browser login or `leaflink auth import --base-url ...` (see
+[Import cookies](#import-cookies-servers-without-a-browser)) can supply a session for that instance. Keep cookie files and `auth.json` out of
 Git and workflow logs. Login sessions are scoped to their instance. Self-hosted
 HTTP(S) origins are supported; reverse-proxy subpath deployments are not.
 TLS certificate verification remains enabled. Editor API compatibility still
@@ -170,17 +170,64 @@ Example output:
 [ok] Saved session for https://cn.overleaf.com
 ```
 
-### Import cookies manually
+### Import cookies (servers without a browser)
+
+`leaflink login` needs a desktop browser. On an SSH server or container, log in with a
+browser on any other machine, copy the session cookie, and import it on the server.
+
+1. Log in to Overleaf, then open DevTools → Application (Firefox: Storage) → Cookies → your Overleaf site.
+2. Copy the value of the session cookie:
+
+   | Site | Cookie name |
+   | --- | --- |
+   | `www.overleaf.com` / `cn.overleaf.com` | `overleaf_session2` |
+   | Self-hosted Overleaf (CE / Server Pro) | `sharelatex.sid` |
+
+3. Import it in one of three ways.
+
+**Interactive prompt (recommended)** — values are hidden and stay out of shell history:
+
+```bash
+leaflink auth import --base-url https://www.overleaf.com
+```
+
+```text
+[auth] Enter cookies for https://www.overleaf.com from a logged-in browser (DevTools -> Application -> Cookies).
+[auth] Session cookie: overleaf_session2 on overleaf.com, sharelatex.sid on self-hosted Overleaf.
+[auth] Leave the name empty to finish.
+Cookie name: overleaf_session2
+Value of overleaf_session2 (hidden):
+Cookie name:
+[ok] Imported cookies for https://www.overleaf.com
+```
+
+At the name prompt you can also paste a whole `Cookie:` request header (`a=1; b=2`) copied from the Network tab.
+
+**Command line** — handy for scripts, but the value ends up in shell history:
+
+```bash
+leaflink auth import --base-url https://overleaf.example.com --cookie 'sharelatex.sid=s%3A...'
+```
+
+**JSON file**:
 
 ```bash
 leaflink auth import --base-url https://www.overleaf.com --cookie-file cookies.json
 ```
 
-Example output:
-
-```text
-[ok] Imported cookies for https://www.overleaf.com
+```json
+[
+  {"name": "overleaf_session2", "value": "s%3A...", "domain": ".overleaf.com"}
+]
 ```
+
+- `name` and `value` are required.
+- `domain` is optional and defaults to the `--base-url` host (`.overleaf.com` for the official sites).
+- `path`, `secure` and `httpOnly` are optional.
+- `{"cookies": [...]}` exports from browser cookie extensions and a plain `{"overleaf_session2": "s%3A..."}` object are also accepted.
+
+`leaflink login` accepts the same `--cookie-file` / `--cookie` options. Run `leaflink list` afterwards to
+check the session works; `leaflink auth import --help` shows this reference offline.
 
 ### Logout
 
@@ -426,6 +473,7 @@ Each cloned project stores internal metadata in:
 
 - LeafLink does not store plaintext passwords
 - only required session cookies and metadata are persisted
+- delete cookie files after importing them (or use the interactive prompt, which leaves nothing on disk)
 - logs avoid printing sensitive auth values by default
 - storing sessions is best done on trusted personal devices only
 

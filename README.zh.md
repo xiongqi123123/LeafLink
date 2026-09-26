@@ -43,7 +43,7 @@ LeafLink 是一个开源命令行工具，用于在本地目录和 Overleaf 项�
 ## 功能概览
 
 - 浏览器登录并持久化会话 Cookie
-- 手动导入 Cookie 作为后备认证方案
+- 无浏览器的服务器可导入 Cookie（交互式输入、`--cookie` 或 JSON 文件）
 - 列出账号下项目
 - 通过项目 URL / 项目 ID / 项目名克隆项目
 - 拉取远端变更到本地
@@ -70,8 +70,8 @@ leaflink list --base-url https://overleaf.lan.example.com
 leaflink clone https://overleaf.lan.example.com/project/PROJECT_ID ./paper
 ```
 
-支持浏览器登录，也可用 `leaflink auth import --base-url ... --cookie-file cookies.json`
-导入该实例的会话。Cookie 文件和 `auth.json` 不应提交到 Git 或打印到 CI 日志。
+支持浏览器登录，也可用 `leaflink auth import --base-url ...` 导入该实例的会话
+（见[导入 Cookie](#导入-cookie无图形界面的服务器)）。Cookie 文件和 `auth.json` 不应提交到 Git 或打印到 CI 日志。
 支持 HTTP(S) 站点根地址，不支持反向代理子路径部署；HTTPS 证书验证保持开启。
 自建版本的编辑器接口可能不同，正式使用前请先用测试项目验证上传兼容性。
 
@@ -163,17 +163,64 @@ leaflink login --base-url https://cn.overleaf.com
 [ok] Saved session for https://cn.overleaf.com
 ```
 
-### 手动导入 Cookie
+### 导入 Cookie（无图形界面的服务器）
+
+`leaflink login` 需要桌面浏览器。在 SSH 服务器或容器里，可以先在任意一台有浏览器的机器上登录，
+复制会话 Cookie，再到服务器上导入。
+
+1. 在浏览器中登录 Overleaf，打开 开发者工具 → Application（Firefox 为“存储”）→ Cookies → 你的 Overleaf 站点。
+2. 复制会话 Cookie 的值：
+
+   | 站点 | Cookie 名称 |
+   | --- | --- |
+   | `www.overleaf.com` / `cn.overleaf.com` | `overleaf_session2` |
+   | 自建 Overleaf（CE / Server Pro） | `sharelatex.sid` |
+
+3. 用下面三种方式之一导入。
+
+**交互式输入（推荐）**——值不回显，也不会进入 shell 历史：
+
+```bash
+leaflink auth import --base-url https://www.overleaf.com
+```
+
+```text
+[auth] Enter cookies for https://www.overleaf.com from a logged-in browser (DevTools -> Application -> Cookies).
+[auth] Session cookie: overleaf_session2 on overleaf.com, sharelatex.sid on self-hosted Overleaf.
+[auth] Leave the name empty to finish.
+Cookie name: overleaf_session2
+Value of overleaf_session2 (hidden):
+Cookie name:
+[ok] Imported cookies for https://www.overleaf.com
+```
+
+在 `Cookie name:` 处也可以直接粘贴从 Network 面板复制的整段 `Cookie:` 请求头（`a=1; b=2`）。
+
+**命令行参数**——适合脚本，但值会留在 shell 历史里：
+
+```bash
+leaflink auth import --base-url https://overleaf.example.com --cookie 'sharelatex.sid=s%3A...'
+```
+
+**JSON 文件**：
 
 ```bash
 leaflink auth import --base-url https://www.overleaf.com --cookie-file cookies.json
 ```
 
-示意输出：
-
-```text
-[ok] Imported cookies for https://www.overleaf.com
+```json
+[
+  {"name": "overleaf_session2", "value": "s%3A...", "domain": ".overleaf.com"}
+]
 ```
+
+- `name` 和 `value` 必填。
+- `domain` 可省略，默认取 `--base-url` 的主机名（官方站点为 `.overleaf.com`）。
+- `path`、`secure`、`httpOnly` 可省略。
+- 也支持浏览器 Cookie 插件导出的 `{"cookies": [...]}`，以及简单的 `{"overleaf_session2": "s%3A..."}` 对象。
+
+`leaflink login` 同样支持 `--cookie-file` / `--cookie`。导入后可运行 `leaflink list` 验证会话是否有效；
+离线时可通过 `leaflink auth import --help` 查看上述说明。
 
 ### 登出
 
@@ -415,6 +462,7 @@ LeafLink 的元数据不会散落在项目根目录其他位置。
 
 - 不保存用户名密码明文
 - 只保存必要的会话 Cookie / session
+- 导入后请删除 Cookie 文件（交互式输入不会在磁盘上留下任何文件）
 - 日志输出默认不会打印敏感认证信息
 - 建议仅在个人可信设备上保存会话
 
