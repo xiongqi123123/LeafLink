@@ -20,6 +20,48 @@ DEFAULT_IGNORE_PATTERNS = [
 ]
 
 
+EXTRA_LATEX_PATTERNS = [
+    "*.toc",
+    "*.lof",
+    "*.lot",
+    "*.blg",
+    "*.bcf",
+    "*.run.xml",
+    "*.xdv",
+    "*.dvi",
+    "*.nav",
+    "*.snm",
+    "*.vrb",
+]
+
+
+def default_ignore_file_text(ignore_file: str = ".leafignore") -> str:
+    """Starter ignore file written into projects that have none."""
+    built_in = " ".join(DEFAULT_IGNORE_PATTERNS)
+    extra = "\n".join(EXTRA_LATEX_PATTERNS)
+    return f"""\
+# LeafLink ignore rules: matching files are never pulled or pushed.
+# Syntax is like .gitignore: *.ext, dir/, /rooted/path, **, and !pattern to re-include.
+# Edits take effect on the next leaflink command (or the next `sync` poll).
+# Adding a rule never deletes files already on Overleaf; LeafLink just stops syncing them.
+#
+# Ignored by default, even without this file (use !pattern to re-include):
+#   {built_in}
+
+# Keep this file on this machine only. Delete this line to share these rules
+# with collaborators through the Overleaf project.
+/{ignore_file}
+
+# More LaTeX build files
+{extra}
+
+# Examples:
+# build/
+# figures/generated/
+# main.pdf
+"""
+
+
 @dataclass(slots=True)
 class IgnoreMatcher:
     patterns: list[str]

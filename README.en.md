@@ -80,7 +80,11 @@ depends on the deployed Overleaf version; validate uploads on a test project fir
 
 ### Ignore behavior
 
-Place `.leafignore` at the project root (or pass `--ignore-file` to the sync commands).
+LeafLink creates `.leafignore` at the project root on `clone`, and on the first `pull`, `push`,
+`status` or `sync` in projects cloned by older versions (not with `--dry-run`). It skips this when the
+project already has an ignore file or one was synced before and then deleted. The generated file
+ignores itself (`/.leafignore`), so it stays on your machine; delete that line to share the rules
+with collaborators through Overleaf. `--ignore-file` selects a different file name.
 Rules filter **both local and remote** changes: clone/pull, push, and deletions.
 Adding a rule leaves existing local and remote files untouched; it does not delete
 them. The long-running sync loop reloads rules at the next synchronization check.
@@ -103,7 +107,7 @@ build/
 Unlike Git, LeafLink allows an explicit later rule to re-include a file beneath an
 ignored directory. It reads one root ignore file; nested `.gitignore` files and Git's
 backslash-escape syntax are not supported. `.git` and `.leaflink` metadata are always
-excluded and cannot be re-included. `.leafignore` itself is synced unless excluded.
+excluded and cannot be re-included. `.leafignore` itself is synced unless excluded (the generated one excludes itself).
 Default LaTeX artifact patterns still apply; ordinary rules may override them.
 
 When running in disposable CI jobs, persist the project's `.leaflink` baseline
@@ -404,28 +408,38 @@ leaflink doctor --base-url https://overleaf.example.com
 
 ## `.leafignore` Example
 
+This is the file LeafLink generates. Add your own rules below it; edits apply on the next command.
+
 ```gitignore
-# LeafLink metadata
-.leaflink/
+# LeafLink ignore rules: matching files are never pulled or pushed.
+# Syntax is like .gitignore: *.ext, dir/, /rooted/path, **, and !pattern to re-include.
+# Edits take effect on the next leaflink command (or the next `sync` poll).
+# Adding a rule never deletes files already on Overleaf; LeafLink just stops syncing them.
+#
+# Ignored by default, even without this file (use !pattern to re-include):
+#   .leaflink/ .git/ .DS_Store *.aux *.log *.synctex.gz *.synctex(busy) *.fdb_latexmk *.fls *.out
 
-# Git
-.git/
+# Keep this file on this machine only. Delete this line to share these rules
+# with collaborators through the Overleaf project.
+/.leafignore
 
-# macOS
-.DS_Store
+# More LaTeX build files
+*.toc
+*.lof
+*.lot
+*.blg
+*.bcf
+*.run.xml
+*.xdv
+*.dvi
+*.nav
+*.snm
+*.vrb
 
-# LaTeX temporary files
-*.aux
-*.log
-*.out
-*.fls
-*.fdb_latexmk
-*.synctex.gz
-*.synctex(busy)
-
-# Custom rules
-build/
-dist/
+# Examples:
+# build/
+# figures/generated/
+# main.pdf
 ```
 
 See [examples/leafignore.example](examples/leafignore.example) for a complete example.

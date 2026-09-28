@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.7 — 2026-09-28
+
+- Create a starter `.leafignore` on `clone`, and on the first `pull`/`push`/`status`/`sync` of
+  projects that never had one (not in `--dry-run`). It lists the built-in rules, adds more LaTeX build
+  files, and ignores itself (`/.leafignore`) so it stays local unless that line is removed.
+  A policy that was synced before and then deleted is not recreated.
+
 ## 0.3.6 — 2026-09-28
 
 - Playwright and `watchdog` are now regular dependencies: `pip install leaflink` installs everything.

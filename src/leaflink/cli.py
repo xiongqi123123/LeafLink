@@ -241,10 +241,14 @@ def main(argv: Sequence[str] | None = None, client_factory: ClientFactory | None
                 )
                 engine = SyncEngine(target_dir, client)
                 archive = client.download_project_archive(info.project_id)
-                engine.clone_into(archive, revision=info.revision)
+                created_policy = engine.clone_into(archive, revision=info.revision)
                 print_console("ok", f"Cloned {info.name} into {target_dir}")
+                if created_policy:
+                    _print_ignore_file_created(engine)
             case "pull":
                 engine = _load_engine(args.project_dir, args.ignore_file, auth_manager, client_factory)
+                if not args.dry_run and engine.ensure_ignore_file():
+                    _print_ignore_file_created(engine)
                 report = engine.pull(
                     strategy=args.conflict_strategy,
                     dry_run=args.dry_run,
@@ -253,6 +257,8 @@ def main(argv: Sequence[str] | None = None, client_factory: ClientFactory | None
                 _print_sync_report(report, prefix="pull")
             case "push":
                 engine = _load_engine(args.project_dir, args.ignore_file, auth_manager, client_factory)
+                if not args.dry_run and engine.ensure_ignore_file():
+                    _print_ignore_file_created(engine)
                 report = engine.push(
                     strategy=args.conflict_strategy,
                     dry_run=args.dry_run,
@@ -261,6 +267,8 @@ def main(argv: Sequence[str] | None = None, client_factory: ClientFactory | None
                 _print_sync_report(report, prefix="push")
             case "status":
                 engine = _load_engine(args.project_dir, args.ignore_file, auth_manager, client_factory)
+                if engine.ensure_ignore_file():
+                    _print_ignore_file_created(engine)
                 report = engine.status()
                 _print_status(report)
             case "download":
@@ -269,6 +277,8 @@ def main(argv: Sequence[str] | None = None, client_factory: ClientFactory | None
                 print_console("ok", f"Downloaded PDF to {destination}")
             case "sync":
                 engine = _load_engine(args.project_dir, args.ignore_file, auth_manager, client_factory)
+                if not args.dry_run and engine.ensure_ignore_file():
+                    _print_ignore_file_created(engine)
                 _print_sync_event(
                     SyncLifecycleEvent(
                         stage="startup",
@@ -323,6 +333,13 @@ def main(argv: Sequence[str] | None = None, client_factory: ClientFactory | None
         print_console("error", str(exc), stream=sys.stderr)
         return 1
     return 0
+
+
+def _print_ignore_file_created(engine: SyncEngine) -> None:
+    print_console(
+        "info",
+        f"Created {engine.ignore_file} with default rules (kept local). Edit it to exclude more files from sync.",
+    )
 
 
 def _run_doctor(

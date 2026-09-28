@@ -77,7 +77,10 @@ leaflink clone https://overleaf.lan.example.com/project/PROJECT_ID ./paper
 
 ### 忽略规则的实际行为
 
-在项目根目录放置 `.leafignore`；同步命令也可通过 `--ignore-file` 指定其他文件。
+`clone` 时 LeafLink 会在项目根目录自动创建 `.leafignore`；旧版本 clone 的项目，会在第一次运行
+`pull`、`push`、`status` 或 `sync` 时补上（`--dry-run` 不会创建）。如果项目已有规则文件，
+或者规则文件以前同步过、后来被删除，则不会创建。生成的文件会忽略它自己（`/.leafignore`），
+只保留在本机；删掉这一行，就会通过 Overleaf 与协作者共享这套规则。`--ignore-file` 可以指定其他文件名。
 规则同时过滤本地与远端变化，覆盖 clone、pull、push 和删除同步。
 新增忽略规则不会删除已有的本地或远端文件；长期运行的 sync 会在下一次检查时重新读取规则。
 首次 clone 时，没有本地规则文件才采用远端规则，本地已有规则优先。
@@ -97,7 +100,7 @@ build/
 上例忽略构建目录和 PDF，但保留 figures 中的资源。与 Git 不同，LeafLink 允许后续规则
 直接重新包含被忽略目录中的文件；只读取一个根规则文件，不读取嵌套 `.gitignore`，
 不支持 Git 的反斜杠转义语法。`.git` 和 `.leaflink` 始终受到保护，不能通过反选上传。
-`.leafignore` 本身默认参与同步。默认 LaTeX 临时文件规则仍然生效，也可以用后续规则覆盖。
+`.leafignore` 本身默认参与同步（自动生成的文件会忽略它自己）。默认 LaTeX 临时文件规则仍然生效，也可以用后续规则覆盖。
 
 在每次重新创建的 CI 工作目录中使用时，需要单独持久保存 `.leaflink` 同步基线，
 认证信息则放入 Secrets。本版不会自动安装 Gitea 工作流，也不会自动把普通 checkout
@@ -396,28 +399,38 @@ leaflink doctor --base-url https://overleaf.example.com
 
 ## `.leafignore` 示例
 
+下面就是 LeafLink 自动生成的文件。在它后面添加自己的规则即可，改动在下一次运行命令时生效。
+
 ```gitignore
-# LeafLink metadata
-.leaflink/
+# LeafLink ignore rules: matching files are never pulled or pushed.
+# Syntax is like .gitignore: *.ext, dir/, /rooted/path, **, and !pattern to re-include.
+# Edits take effect on the next leaflink command (or the next `sync` poll).
+# Adding a rule never deletes files already on Overleaf; LeafLink just stops syncing them.
+#
+# Ignored by default, even without this file (use !pattern to re-include):
+#   .leaflink/ .git/ .DS_Store *.aux *.log *.synctex.gz *.synctex(busy) *.fdb_latexmk *.fls *.out
 
-# Git
-.git/
+# Keep this file on this machine only. Delete this line to share these rules
+# with collaborators through the Overleaf project.
+/.leafignore
 
-# macOS
-.DS_Store
+# More LaTeX build files
+*.toc
+*.lof
+*.lot
+*.blg
+*.bcf
+*.run.xml
+*.xdv
+*.dvi
+*.nav
+*.snm
+*.vrb
 
-# LaTeX temporary files
-*.aux
-*.log
-*.out
-*.fls
-*.fdb_latexmk
-*.synctex.gz
-*.synctex(busy)
-
-# Custom rules
-build/
-dist/
+# Examples:
+# build/
+# figures/generated/
+# main.pdf
 ```
 
 完整示例见 [examples/leafignore.example](examples/leafignore.example)。

@@ -20,7 +20,7 @@ from leaflink.sync.conflict import (
     build_remote_conflict_path,
 )
 from leaflink.sync.diff import ChangeSet, detect_conflicts, diff_files
-from leaflink.sync.ignore import IgnoreMatcher
+from leaflink.sync.ignore import IgnoreMatcher, default_ignore_file_text
 from leaflink.sync.state import (
     FileFingerprint,
     StateStore,
@@ -122,7 +122,8 @@ class SyncEngine:
             remote_details=remote_details,
         )
 
-    def clone_into(self, archive: DownloadedArchive, revision: str | None = None) -> None:
+    def clone_into(self, archive: DownloadedArchive, revision: str | None = None) -> bool:
+        """Write the archive into the project; return True if a starter ignore file was created."""
         # A remote ignore file supplies the policy on first clone. An existing
         # local policy takes precedence; do not overwrite it with the archive.
         policy_path = self.project_root / self.ignore_file
@@ -130,6 +131,7 @@ class SyncEngine:
         if not existing_policy and self.ignore_file in archive.files:
             policy_path.parent.mkdir(parents=True, exist_ok=True)
             policy_path.write_bytes(archive.files[self.ignore_file])
+        created_policy = self.ensure_ignore_file()
         self._reload_ignore()
         for relative_path, content in archive.files.items():
             if self.ignore.matches(relative_path) or (relative_path == self.ignore_file and existing_policy):
@@ -143,6 +145,20 @@ class SyncEngine:
         state = SyncState(local_files=local_now, remote_files=remote_now, last_remote_revision=revision)
         self.state_store.save(mark_pulled(state, revision=revision))
         self._write_base_snapshot_from_local(local_now)
+        return created_policy
+
+    def ensure_ignore_file(self) -> bool:
+        """Create a local-only starter ignore file unless the project has, or had, one."""
+        policy_path = self.project_root / self.ignore_file
+        if policy_path.exists():
+            return False
+        # A tracked policy that is now missing was deleted on purpose; keep it deleted.
+        state = self.state_store.load()
+        if self.ignore_file in state.local_files or self.ignore_file in state.remote_files:
+            return False
+        policy_path.write_text(default_ignore_file_text(self.ignore_file), encoding="utf-8")
+        self._reload_ignore()
+        return True
 
     def pull(
         self,
