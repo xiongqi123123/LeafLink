@@ -24,6 +24,14 @@ class ClientError(LeafsyncError):
     """Raised when the remote client fails."""
 
 
+class BrowserUnavailableError(LeafsyncError):
+    """Raised when Playwright or its Chromium build cannot be used."""
+
+    def __init__(self, message: str, missing: bool = False) -> None:
+        super().__init__(message)
+        self.missing = missing
+
+
 class ProjectError(LeafsyncError):
     """Raised when project metadata is missing or invalid."""
 

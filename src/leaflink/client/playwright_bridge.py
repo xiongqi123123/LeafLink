@@ -8,6 +8,7 @@ from typing import Any
 
 from leaflink.client.models import AuthSession, RemoteEntity, RemoteProjectTree
 from leaflink.exceptions import ClientError
+from leaflink.utils.browser import launch_chromium, load_sync_playwright
 
 _PROJECT_SEARCH_SCRIPT = r"""
 () => {
@@ -195,12 +196,8 @@ def load_project_tree_from_browser(
     timeout_seconds: int = 25,
 ) -> RemoteProjectTree:
     """Use Playwright to load the editor and discover the project tree."""
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as exc:  # pragma: no cover
-        raise ClientError(
-            "Playwright is required for full remote write support. Install `leaflink[browser]`."
-        ) from exc
+    sync_playwright = load_sync_playwright()
+    from playwright.sync_api import Error as PlaywrightError
 
     project_url = f"{base_url.rstrip('/')}/Project/{project_id}"
     captured: dict[str, Any] = {}
@@ -216,36 +213,40 @@ def load_project_tree_from_browser(
         if candidate is not None:
             captured["project"] = candidate
 
-    with sync_playwright() as playwright:  # pragma: no cover - browser-dependent
-        browser = playwright.chromium.launch(headless=True)
-        context = browser.new_context()
-        context.add_cookies([cookie.to_dict() for cookie in session.cookies])
-        page = context.new_page()
-        page.on("response", handle_response)
+    try:
+        with sync_playwright() as playwright:  # pragma: no cover - browser-dependent
+            browser = launch_chromium(playwright, headless=True)
+            context = browser.new_context()
+            context.add_cookies([cookie.to_dict() for cookie in session.cookies])
+            page = context.new_page()
+            page.on("response", handle_response)
 
-        def handle_websocket(websocket) -> None:
-            def on_frame(payload: str | bytes) -> None:
-                text = payload.decode("utf-8", errors="replace") if isinstance(payload, bytes) else payload
-                candidate = extract_project_from_socket_frame(text)
-                if candidate is not None:
-                    captured["project"] = candidate
+            def handle_websocket(websocket) -> None:
+                def on_frame(payload: str | bytes) -> None:
+                    text = payload.decode("utf-8", errors="replace") if isinstance(payload, bytes) else payload
+                    candidate = extract_project_from_socket_frame(text)
+                    if candidate is not None:
+                        captured["project"] = candidate
 
-            websocket.on("framereceived", on_frame)
+                websocket.on("framereceived", on_frame)
 
-        page.on("websocket", handle_websocket)
-        page.goto(project_url, wait_until="domcontentloaded")
+            page.on("websocket", handle_websocket)
+            page.goto(project_url, wait_until="domcontentloaded")
 
-        for _ in range(timeout_seconds):
-            if "project" in captured:
-                browser.close()
-                return extract_project_tree_from_browser_model(captured["project"], project_id=project_id)
-            candidate = page.evaluate(_PROJECT_SEARCH_SCRIPT)
-            if candidate:
-                browser.close()
-                return extract_project_tree_from_browser_model(candidate, project_id=project_id)
-            page.wait_for_timeout(1000)
+            for _ in range(timeout_seconds):
+                if "project" in captured:
+                    browser.close()
+                    return extract_project_tree_from_browser_model(captured["project"], project_id=project_id)
+                candidate = page.evaluate(_PROJECT_SEARCH_SCRIPT)
+                if candidate:
+                    browser.close()
+                    return extract_project_tree_from_browser_model(candidate, project_id=project_id)
+                page.wait_for_timeout(1000)
 
-        browser.close()
+            browser.close()
+    except PlaywrightError as exc:  # pragma: no cover - browser-dependent
+        first_line = next((line for line in str(exc).splitlines() if line.strip()), type(exc).__name__)
+        raise ClientError(f"Browser error while loading the project editor: {first_line}") from exc
     raise ClientError(
         "Could not discover the remote project tree from the editor session. "
         "Please open the project once in a browser and try again."

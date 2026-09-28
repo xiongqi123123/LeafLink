@@ -9,7 +9,8 @@ from urllib.parse import urlparse
 
 from leaflink.client.models import SessionCookie
 from leaflink.config import normalize_base_url
-from leaflink.exceptions import AuthenticationError
+from leaflink.exceptions import AuthenticationError, BrowserUnavailableError
+from leaflink.utils.browser import launch_chromium, load_sync_playwright
 from leaflink.utils.console import print_console
 
 SUPPORTED_HOSTS = {"www.overleaf.com", "cn.overleaf.com"}
@@ -140,23 +141,18 @@ def _allowed_cookie_hosts(base_url: str) -> set[str]:
 
 
 def login_with_browser(base_url: str, timeout_seconds: int = 300) -> BrowserLoginResult:
-    try:
-        from playwright.sync_api import Error as PlaywrightError
-        from playwright.sync_api import sync_playwright
-    except ImportError as exc:  # pragma: no cover
-        raise AuthenticationError(
-            "Playwright is not installed. Install `leaflink[browser]`, "
-            "or run `leaflink auth import` to enter cookies instead."
-        ) from exc
+    sync_playwright = load_sync_playwright()
+    from playwright.sync_api import Error as PlaywrightError
 
     login_url = f"{base_url.rstrip('/')}/login"
     with sync_playwright() as playwright:  # pragma: no cover
         try:
-            browser = playwright.chromium.launch(headless=False)
-        except PlaywrightError as exc:
-            raise AuthenticationError(
-                "Could not open a browser window (no display, or Chromium not installed via "
-                "`playwright install chromium`). On a server, run `leaflink auth import` to enter "
+            browser = launch_chromium(playwright, headless=False)
+        except BrowserUnavailableError as exc:
+            if exc.missing:
+                raise
+            raise BrowserUnavailableError(
+                f"{exc} On a server without a display, run `leaflink auth import` to enter "
                 "cookies copied from a browser on another machine."
             ) from exc
         context = browser.new_context()

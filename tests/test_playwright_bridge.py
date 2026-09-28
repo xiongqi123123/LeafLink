@@ -144,7 +144,11 @@ class PlaywrightBridgeTests(unittest.TestCase):
             def __exit__(self, exc_type, exc, tb) -> bool:
                 return False
 
-        fake_module = type("FakePlaywrightModule", (), {"sync_playwright": lambda: _FakePlaywrightManager()})
+        fake_module = type(
+            "FakePlaywrightModule",
+            (),
+            {"sync_playwright": lambda: _FakePlaywrightManager(), "Error": type("FakeError", (Exception,), {})},
+        )
         session = AuthSession(
             base_url="https://cn.overleaf.com",
             cookies=[SessionCookie(name="sharelatex.sid", value="x", domain="cn.overleaf.com")],

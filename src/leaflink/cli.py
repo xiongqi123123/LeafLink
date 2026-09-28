@@ -13,12 +13,21 @@ from typing import Callable, Sequence
 from leaflink.auth.cookie_import import COOKIE_FILE_EXAMPLE, parse_cookie_pairs
 from leaflink.auth.manager import AuthManager
 from leaflink.client.overleaf_client import OverleafClient, OverleafClientProtocol
+from leaflink import doctor
 from leaflink.config import ConfigStore, infer_base_url_from_project_url, normalize_base_url
-from leaflink.exceptions import AuthenticationError, ClientError, LeafsyncError, ProjectError, SyncConflictError
+from leaflink.exceptions import (
+    AuthenticationError,
+    BrowserUnavailableError,
+    ClientError,
+    LeafsyncError,
+    ProjectError,
+    SyncConflictError,
+)
 from leaflink.project.metadata import ProjectConfig, ProjectMetadataStore
 from leaflink.sync.conflict import ConflictStrategy, MergeAnalysis
 from leaflink.sync.engine import ChangeDetails, LocalChangeEvent, SyncEngine, SyncLifecycleEvent, SyncReport
 from leaflink.sync.state import StateStore
+from leaflink.utils.browser import INSTALL_COMMAND, install_chromium
 from leaflink.utils.console import format_label, print_console, style_text, use_color
 from leaflink.utils.logging import configure_logging
 from leaflink.utils.time import format_display_time, utc_now_iso
@@ -92,6 +101,14 @@ def create_parser() -> argparse.ArgumentParser:
     )
     auth_import_parser.add_argument("--base-url", default=None, help="Overleaf base URL.")
     _add_cookie_source_options(auth_import_parser)
+
+    doctor_parser = subparsers.add_parser("doctor", help="Check Playwright, Chromium and the saved session.")
+    doctor_parser.add_argument("--base-url", default=None, help="Overleaf base URL to check the session for.")
+    doctor_parser.add_argument(
+        "--install-browser",
+        action="store_true",
+        help=f"Run `{INSTALL_COMMAND}` without asking if Chromium is missing.",
+    )
 
     list_parser = subparsers.add_parser("list", help="List accessible projects.")
     list_parser.add_argument("--base-url", default=None, help="Overleaf base URL.")
@@ -196,6 +213,9 @@ def main(argv: Sequence[str] | None = None, client_factory: ClientFactory | None
                     config.default_base_url = session.base_url
                     config_store.save(config)
                     print_console("ok", f"Imported cookies for {session.base_url}")
+            case "doctor":
+                base_url = _pick_base_url(args.base_url, config.default_base_url)
+                return _run_doctor(base_url, auth_manager, client_factory, install_browser=args.install_browser)
             case "list":
                 client = _make_client(_pick_base_url(args.base_url, config.default_base_url), auth_manager, client_factory)
                 projects = client.list_projects()
@@ -294,10 +314,63 @@ def main(argv: Sequence[str] | None = None, client_factory: ClientFactory | None
             if details.preview:
                 print(_format_conflict_preview(details.preview, stream=sys.stderr), file=sys.stderr)
         return 2
+    except BrowserUnavailableError as exc:
+        print_console("error", str(exc), stream=sys.stderr)
+        if exc.missing and _offer_chromium_install():
+            print_console("ok", "Chromium installed. Re-run the command.")
+        return 1
     except LeafsyncError as exc:
         print_console("error", str(exc), stream=sys.stderr)
         return 1
     return 0
+
+
+def _run_doctor(
+    base_url: str,
+    auth_manager: AuthManager,
+    client_factory: ClientFactory | None,
+    install_browser: bool,
+) -> int:
+    checks = [
+        doctor.check_runtime(),
+        doctor.check_package("playwright", "browser login and remote writes"),
+        doctor.check_package("watchdog", "leaflink sync"),
+        doctor.check_chromium(),
+        doctor.check_display(),
+        doctor.check_session(
+            base_url,
+            has_session=auth_manager.load(base_url) is not None,
+            count_projects=lambda: len(_make_client(base_url, auth_manager, client_factory).list_projects()),
+        ),
+    ]
+    failed = False
+    for check in checks:
+        if check is None:
+            continue
+        print_console(check.level, check.message)
+        if check.browser_missing and _offer_chromium_install(assume_yes=install_browser):
+            check = doctor.check_chromium()
+            print_console(check.level, check.message)
+        failed = failed or check.level == "error"
+    return 1 if failed else 0
+
+
+def _offer_chromium_install(assume_yes: bool = False, read_line: Callable[[str], str] = input) -> bool:
+    if not assume_yes:
+        if not sys.stdin.isatty():
+            return False
+        try:
+            answer = read_line("Download Chromium for Playwright now (about 280 MB)? [Y/n] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return False
+        if answer not in {"", "y", "yes"}:
+            return False
+    print_console("info", f"Running `{INSTALL_COMMAND}` ...")
+    if install_chromium():
+        return True
+    print_console("error", f"`{INSTALL_COMMAND}` failed; see the output above.", stream=sys.stderr)
+    return False
 
 
 def _parse_cookie_args(values: Sequence[str] | None) -> list[tuple[str, str]]:

@@ -116,22 +116,19 @@ workflow or automatically turn a new checkout into an initialized sync project.
 
 ```bash
 pip install leaflink
+playwright install chromium
+leaflink doctor
 ```
 
-Then run:
+`pip install leaflink` installs everything LeafLink needs, including Playwright and `watchdog`.
+Playwright downloads its browser separately, so run `playwright install chromium` once.
+`push`, `sync` and browser login drive this Chromium to reach Overleaf's editor.
+Run it again after upgrading Playwright, since each Playwright release pins its own browser build.
 
-```bash
-leaflink --help
-```
+If Chromium is missing, LeafLink stops before changing anything remotely and offers to download it.
+`leaflink doctor` checks the whole setup (see [`leaflink doctor`](#leaflink-doctor)).
 
-### Install optional extras
-
-```bash
-pip install "leaflink[browser,watch]"
-```
-
-- `browser`: installs Playwright for browser login and remote discovery
-- `watch`: installs `watchdog` for `leaflink sync`
+Commands from older versions such as `pip install "leaflink[browser,watch]"` still work.
 
 ### Install from source
 
@@ -139,11 +136,6 @@ pip install "leaflink[browser,watch]"
 git clone https://github.com/xiongqi123123/LeafLink.git
 cd LeafLink
 pip install .
-```
-
-### First-time Playwright setup
-
-```bash
 playwright install chromium
 ```
 
@@ -390,6 +382,26 @@ leaflink sync --once
 [2026-03-27 13:21:44] [pull] updated: refs.bib (saved 2026-03-27 13:21:40, by collaborator)
 ```
 
+### `leaflink doctor`
+
+Checks the installed packages, whether Chromium starts, and whether the saved session works.
+Exits with status 1 if something needs fixing. If Chromium is missing it offers to download it;
+`--install-browser` downloads it without asking.
+
+```bash
+leaflink doctor
+leaflink doctor --base-url https://overleaf.example.com
+```
+
+```text
+[ok] leaflink 0.3.6 on Python 3.11.9 (linux)
+[ok] playwright 1.63.0
+[ok] watchdog 6.0.0
+[ok] Chromium starts (needed by push, sync and browser login)
+[warn] No display detected: `leaflink login` cannot open a browser here. Use `leaflink auth import` instead.
+[ok] Session for https://www.overleaf.com works (12 projects)
+```
+
 ## `.leafignore` Example
 
 ```gitignore
@@ -483,7 +495,7 @@ Each cloned project stores internal metadata in:
 
 ## Development and Release
 
-- install dev dependencies: `pip install -e ".[dev,browser,watch]"`
+- install dev dependencies: `pip install -e ".[dev]"` then `playwright install chromium`
 - run tests: `python -m unittest discover -s tests -v`
 - build locally: `python scripts/build_dist.py`
 - GitHub Actions:

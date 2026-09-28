@@ -182,6 +182,8 @@ class SyncEngine:
         pulled: list[str] = []
         merged: list[str] = []
         if not dry_run:
+            if report.conflicts:
+                self._prepare_remote_writes()
             if policy_changed:
                 policy_path = self.project_root / self.ignore_file
                 if policy_content is None:
@@ -266,6 +268,8 @@ class SyncEngine:
         pushed: list[str] = []
         merged: list[str] = []
         if not dry_run:
+            if report.conflicts or not report.local_changes.is_empty():
+                self._prepare_remote_writes()
             pushed, merged, resolved_paths = self._resolve_conflicts(
                 report,
                 archive.files,
@@ -475,6 +479,12 @@ class SyncEngine:
 
     def _visible_files(self, files: dict[str, FileFingerprint]) -> dict[str, FileFingerprint]:
         return {path: item for path, item in files.items() if not self.ignore.matches(path)}
+
+    def _prepare_remote_writes(self) -> None:
+        # Fail before the first remote write rather than halfway through a push.
+        prepare = getattr(self.client, "prepare_remote_writes", None)
+        if prepare is not None:
+            prepare(self.project.project_id)
 
     def _reset_remote_cache(self) -> None:
         reset = getattr(self.client, "reset_remote_cache", None)

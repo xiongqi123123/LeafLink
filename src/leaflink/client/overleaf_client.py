@@ -285,6 +285,10 @@ class OverleafClient:
         self._root_folder_ids[project_id] = tree.root_folder_id
         return tree
 
+    def prepare_remote_writes(self, project_id: str) -> None:
+        """Load the editor tree up front so a missing browser fails before any write."""
+        self.get_project_tree(project_id)
+
     def upload_file(self, project_id: str, path: str, content: bytes) -> None:
         root_folder_id = self._root_folder_ids.get(project_id)
         if root_folder_id is None:

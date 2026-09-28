@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leaflink"
-version = "0.3.5"
+version = "0.3.6"
 description = "A modern CLI for syncing local directories with Overleaf projects."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,7 +27,11 @@ classifiers = [
   "Topic :: Software Development :: Version Control",
   "Topic :: Text Processing :: Markup :: LaTeX",
 ]
-dependencies = ["merge3>=0.0.16"]
+dependencies = [
+  "merge3>=0.0.16",
+  "playwright>=1.42.0",
+  "watchdog>=4.0.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/xiongqi123123/LeafLink"
@@ -35,21 +39,11 @@ Repository = "https://github.com/xiongqi123123/LeafLink"
 Issues = "https://github.com/xiongqi123123/LeafLink/issues"
 
 [project.optional-dependencies]
-browser = ["playwright>=1.42.0"]
-watch = ["watchdog>=4.0.0"]
-html = ["beautifulsoup4>=4.12.0"]
-http = ["httpx>=0.27.0"]
+# Everything users need is a core dependency now. `browser` and `watch` stay as
+# empty extras so older `pip install "leaflink[browser,watch]"` commands keep working.
+browser = []
+watch = []
 dev = ["build>=1.2.2", "pytest>=8.0.0", "twine>=5.1.1"]
-all = [
-  "merge3>=0.0.16",
-  "playwright>=1.42.0",
-  "watchdog>=4.0.0",
-  "beautifulsoup4>=4.12.0",
-  "httpx>=0.27.0",
-  "build>=1.2.2",
-  "pytest>=8.0.0",
-  "twine>=5.1.1",
-]
 
 [project.scripts]
 leaflink = "leaflink.cli:main"

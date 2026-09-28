@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.6 — 2026-09-28
+
+- Playwright and `watchdog` are now regular dependencies: `pip install leaflink` installs everything.
+  The `browser` and `watch` extras remain as empty aliases so older install commands keep working;
+  the unused `html`, `http` and `all` extras are removed.
+- New `leaflink doctor` checks installed packages, whether Chromium starts, display availability on
+  Linux and whether the saved session works. It offers to run `playwright install chromium` when the
+  browser is missing (`--install-browser` skips the question).
+- `push` (and `pull` with conflicts) now loads the editor tree before the first remote write, so a
+  missing browser or rejected session stops the command before anything is uploaded or deleted.
+- A missing or unstartable Chromium is reported as a one-line error instead of a Playwright
+  traceback; in a terminal LeafLink offers to download it on the spot.
+- Browser errors while loading the project editor are reported as LeafLink errors.
+- README: single install sequence (`pip install leaflink && playwright install chromium`) and a
+  `leaflink doctor` section.
+
 ## 0.3.5 — 2026-09-27
 
 - `leaflink auth import` without `--cookie-file` now prompts for cookie names and hidden values,

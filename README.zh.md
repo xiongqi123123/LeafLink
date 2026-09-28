@@ -109,22 +109,19 @@ build/
 
 ```bash
 pip install leaflink
+playwright install chromium
+leaflink doctor
 ```
 
-安装后可直接使用：
+`pip install leaflink` 会装好 LeafLink 需要的全部依赖，包括 Playwright 和 `watchdog`。
+Playwright 的浏览器需要单独下载，所以要运行一次 `playwright install chromium`。
+`push`、`sync` 和浏览器登录都要通过这个 Chromium 访问 Overleaf 编辑器。
+每个 Playwright 版本都绑定自己的浏览器版本，升级 Playwright 后需要重新运行这条命令。
 
-```bash
-leaflink --help
-```
+缺少 Chromium 时，LeafLink 会在改动远端之前停下，并提示是否立即下载。
+`leaflink doctor` 可以一次检查整套环境（见 [`leaflink doctor`](#leaflink-doctor)）。
 
-### 安装可选依赖
-
-```bash
-pip install "leaflink[browser,watch]"
-```
-
-- `browser`：安装 Playwright，用于浏览器登录和部分远端发现能力
-- `watch`：安装 `watchdog`，用于 `leaflink sync`
+旧版本的安装命令，比如 `pip install "leaflink[browser,watch]"`，仍然可以使用。
 
 ### 从源码安装
 
@@ -132,11 +129,6 @@ pip install "leaflink[browser,watch]"
 git clone https://github.com/xiongqi123123/LeafLink.git
 cd LeafLink
 pip install .
-```
-
-### 首次使用 Playwright
-
-```bash
 playwright install chromium
 ```
 
@@ -383,6 +375,25 @@ leaflink sync --once
 [2026-03-27 13:21:44] [pull] updated: refs.bib (saved 2026-03-27 13:21:40, by collaborator)
 ```
 
+### `leaflink doctor`
+
+检查已安装的依赖、Chromium 能否启动，以及已保存的登录会话是否有效。有需要修复的问题时以状态码 1 退出。
+缺少 Chromium 时会询问是否下载；加上 `--install-browser` 则不询问，直接下载。
+
+```bash
+leaflink doctor
+leaflink doctor --base-url https://overleaf.example.com
+```
+
+```text
+[ok] leaflink 0.3.6 on Python 3.11.9 (linux)
+[ok] playwright 1.63.0
+[ok] watchdog 6.0.0
+[ok] Chromium starts (needed by push, sync and browser login)
+[warn] No display detected: `leaflink login` cannot open a browser here. Use `leaflink auth import` instead.
+[ok] Session for https://www.overleaf.com works (12 projects)
+```
+
 ## `.leafignore` 示例
 
 ```gitignore
@@ -472,7 +483,7 @@ LeafLink 的元数据不会散落在项目根目录其他位置。
 
 ## 开发与发布
 
-- 安装开发依赖：`pip install -e ".[dev,browser,watch]"`
+- 安装开发依赖：`pip install -e ".[dev]"`，再运行 `playwright install chromium`
 - 运行测试：`python -m unittest discover -s tests -v`
 - 本地打包：`python scripts/build_dist.py`
 - GitHub Actions：
