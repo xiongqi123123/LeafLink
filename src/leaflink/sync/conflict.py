@@ -43,8 +43,11 @@ def analyze_conflict(
     local_content: bytes | None,
     remote_content: bytes | None,
 ) -> MergeAnalysis:
+    if local_content is None and remote_content is None:
+        # Deleted on both sides: nothing to write, and never an empty placeholder file.
+        return MergeAnalysis(path=path, can_auto_merge=True, reason="Deleted on both sides.")
     if local_content == remote_content:
-        return MergeAnalysis(path=path, can_auto_merge=True, merged_content=local_content or remote_content or b"")
+        return MergeAnalysis(path=path, can_auto_merge=True, merged_content=local_content)
 
     if local_content is None or remote_content is None:
         return MergeAnalysis(

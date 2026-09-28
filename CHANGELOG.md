@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.8 — 2026-09-28
+
+- Fix: a file deleted both locally and on Overleaf was treated as a conflict and "auto-merged" into
+  an empty file, which was written locally and uploaded again. Deletions on both sides are now
+  agreement: nothing is written, uploaded or reported, under every conflict strategy, in push and pull.
+- Conflict analysis never produces content when both sides are missing.
+- `push` only deletes remote files that still exist, so already-removed files no longer trigger a
+  browser session or a misleading report line.
+
 ## 0.3.7 — 2026-09-28
 
 - Create a starter `.leafignore` on `clone`, and on the first `pull`/`push`/`status`/`sync` of

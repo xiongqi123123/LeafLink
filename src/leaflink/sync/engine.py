@@ -302,6 +302,8 @@ class SyncEngine:
             for path in delete_paths:
                 if path in report.conflicts and strategy == "keep-remote":
                     continue
+                if path not in remote_paths:
+                    continue  # already gone remotely
                 self.client.delete_file(self.project.project_id, path)
                 pushed.append(path)
             upload_paths = sorted(
@@ -590,13 +592,14 @@ class SyncEngine:
             analysis = report.conflict_details.get(path)
             if analysis is None:
                 continue
-            if analysis.can_auto_merge and analysis.merged_content is not None:
-                destination = self.project_root / path
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes(analysis.merged_content)
-                self.client.upload_file(self.project.project_id, path, analysis.merged_content)
-                changed.append(path)
-                merged.append(path)
+            if analysis.can_auto_merge:
+                if analysis.merged_content is not None:
+                    destination = self.project_root / path
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_bytes(analysis.merged_content)
+                    self.client.upload_file(self.project.project_id, path, analysis.merged_content)
+                    changed.append(path)
+                    merged.append(path)
                 resolved_paths.add(path)
                 continue
 

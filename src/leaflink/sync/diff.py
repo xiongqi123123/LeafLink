@@ -42,7 +42,8 @@ def diff_files(
 
 
 def detect_conflicts(local: ChangeSet, remote: ChangeSet) -> list[str]:
-    conflicts = local.all_paths() & remote.all_paths()
+    # Deleting a file on both sides is agreement, not a conflict.
+    conflicts = (local.all_paths() & remote.all_paths()) - (set(local.deleted) & set(remote.deleted))
     return sorted(conflicts)
 
 

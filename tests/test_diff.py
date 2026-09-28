@@ -35,7 +35,8 @@ class DiffTests(unittest.TestCase):
         self.assertEqual(remote_changes.added, ["refs.bib"])
         self.assertEqual(remote_changes.modified, ["main.tex"])
         self.assertEqual(remote_changes.deleted, ["old.tex"])
-        self.assertEqual(conflicts, ["main.tex", "old.tex"])
+        # old.tex was deleted on both sides: both agree, so it is not a conflict.
+        self.assertEqual(conflicts, ["main.tex"])
 
     def test_detect_divergence_finds_persistent_split(self) -> None:
         local_now = {
